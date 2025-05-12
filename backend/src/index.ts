@@ -323,6 +323,39 @@ app.get(
   }
 );
 
+// Endpoint to fetch all memories for the authenticated user
+app.get(
+  "/api/memories",
+  authenticateToken,
+  async (req: AuthenticatedRequest, res: express.Response): Promise<void> => {
+    const userIdFromToken = req.userAuth?.userId;
+
+    if (!userIdFromToken) {
+      // This case should ideally be caught by authenticateToken, but good for defense
+      res
+        .status(401)
+        .json({ error: "Authentication error: User ID not found in token." });
+      return;
+    }
+
+    try {
+      const memories = await Memory.find({ userId: userIdFromToken }).sort({
+        createdAt: -1,
+      }); // Sort by newest first
+      res.status(200).json(memories);
+    } catch (error: any) {
+      console.error(
+        `[Backend /api/memories] Error fetching memories for user ${userIdFromToken}:`,
+        error
+      );
+      res.status(500).json({
+        error: "Failed to fetch memories.",
+        details: error.message,
+      });
+    }
+  }
+);
+
 app.listen(port, () => {
   console.log(`Server is running at http://localhost:${port}`);
 });

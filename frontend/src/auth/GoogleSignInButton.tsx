@@ -21,6 +21,9 @@ export function GoogleSignInButton({ onAuthError }: GoogleSignInButtonProps) {
         try {
           await auth.login(tokenResponse);
           console.log("[GoogleSignInButton] auth.login() completed.");
+          // Log the JWT after successful login
+          const jwtToken = auth.getAuthToken();
+          console.log("[GoogleSignInButton] JWT Token:", jwtToken);
         } catch (error) {
           console.error(
             "[GoogleSignInButton] Error during auth.login():",
