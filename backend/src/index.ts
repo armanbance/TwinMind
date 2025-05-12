@@ -14,6 +14,12 @@ import {
   getPineconeIndex,
   OPENAI_EMBEDDING_MODEL,
 } from "./lib/pinecone-client"; // Added Pinecone import
+import { S3Client } from "@aws-sdk/client-s3";
+import { Upload } from "@aws-sdk/lib-storage";
+import multerS3 from "multer-s3";
+import { GetObjectCommand } from "@aws-sdk/client-s3";
+import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
+import os from "os";
 
 dotenv.config();
 
@@ -95,24 +101,29 @@ const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
 });
 
-// Configure Multer for file uploads
-// Store files in a temporary 'uploads' directory
-const UPLOAD_DIR = path.join(__dirname, "uploads");
-if (!fs.existsSync(UPLOAD_DIR)) {
-  fs.mkdirSync(UPLOAD_DIR, { recursive: true });
-}
-
-const storage = multer.diskStorage({
-  destination: function (req, file, cb) {
-    cb(null, UPLOAD_DIR);
-  },
-  filename: function (req, file, cb) {
-    // Keep original extension if available, otherwise default to .webm
-    const extension = path.extname(file.originalname) || ".webm";
-    cb(null, file.fieldname + "-" + Date.now() + extension);
+// Configure S3
+const s3 = new S3Client({
+  region: process.env.AWS_REGION || "us-east-1",
+  credentials: {
+    accessKeyId: process.env.AWS_ACCESS_KEY_ID || "",
+    secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY || "",
   },
 });
-const upload = multer({ storage: storage });
+
+// Update multer to use S3 instead of local storage
+const upload = multer({
+  storage: multerS3({
+    s3: s3,
+    bucket: process.env.S3_BUCKET_NAME || "your-bucket-name",
+    metadata: function (req, file, cb) {
+      cb(null, { fieldName: file.fieldname });
+    },
+    key: function (req, file, cb) {
+      const extension = path.extname(file.originalname) || ".webm";
+      cb(null, `audio-uploads/${Date.now().toString()}${extension}`);
+    },
+  }),
+});
 
 app.get("/", (req: Request, res: Response) => {
   res.send("Hello from Express + TypeScript Server");
@@ -145,14 +156,47 @@ app.post(
       return;
     }
 
-    const audioFilePath = req.file.path;
-
     try {
-      // 1. Transcribe the audio
+      // Get a presigned URL for the S3 object
+      const s3Key = (req.file as Express.MulterS3.File).key;
+      if (!s3Key) {
+        throw new Error("Failed to get S3 key from uploaded file");
+      }
+
+      // Create a temporary file to store the audio
+      const tempFilePath = path.join(os.tmpdir(), `${Date.now()}.webm`);
+
+      // Download the file from S3
+      const getObjectParams = {
+        Bucket: process.env.S3_BUCKET_NAME || "your-bucket-name",
+        Key: s3Key,
+      };
+
+      const { Body } = await s3.send(new GetObjectCommand(getObjectParams));
+
+      if (!Body) {
+        throw new Error("Failed to retrieve file from S3");
+      }
+
+      // Write the file to disk
+      const writeStream = fs.createWriteStream(tempFilePath);
+      // @ts-ignore - Body has pipe method but TypeScript doesn't recognize it
+      Body.pipe(writeStream);
+
+      // Wait for file to be fully written
+      await new Promise<void>((resolve, reject) => {
+        writeStream.on("finish", () => resolve());
+        writeStream.on("error", reject);
+      });
+
+      // Use the local file for transcription
       const transcriptionResponse = await openai.audio.transcriptions.create({
         model: "whisper-1",
-        file: fs.createReadStream(audioFilePath),
+        file: fs.createReadStream(tempFilePath),
       });
+
+      // Clean up the temporary file
+      fs.unlinkSync(tempFilePath);
 
       const transcribedText = transcriptionResponse.text;
 
@@ -237,13 +281,6 @@ app.post(
         errorMessage = error.message;
       }
       res.status(500).json({ error: errorMessage });
-    } finally {
-      // Clean up the uploaded file
-      fs.unlink(audioFilePath, (err) => {
-        if (err) {
-          console.error("Error deleting uploaded file:", err);
-        }
-      });
     }
   }
 );
