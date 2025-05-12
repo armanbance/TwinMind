@@ -48,7 +48,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [memoriesVersion, setMemoriesVersion] = useState<number>(0); // New state
 
   useEffect(() => {
-    console.log("[AuthContext] useEffect: Attempting to restore session...");
+    // console.log("[AuthContext] useEffect: Attempting to restore session...");
     const appToken = localStorage.getItem(APP_AUTH_TOKEN_KEY);
     const storedUserString = localStorage.getItem(APP_USER_KEY);
     // Google Access Token is not strictly needed to restore app session state, but if present, good.
@@ -57,10 +57,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     if (appToken && storedUserString) {
       try {
         const storedUser: AppUser = JSON.parse(storedUserString);
-        console.log(
-          "[AuthContext] Restored app token, user, and Google token (if any) from localStorage:",
-          { appToken, storedUser, googleTokenExists: !!googleToken }
-        );
+        // console.log(
+        //   "[AuthContext] Restored app token, user, and Google token (if any) from localStorage:",
+        //   { appToken, storedUser, googleTokenExists: !!googleToken }
+        // );
         setUser(storedUser);
         setIsAuthenticated(true);
       } catch (error) {
@@ -74,21 +74,21 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         localStorage.removeItem(GOOGLE_ACCESS_TOKEN_KEY);
       }
     } else {
-      console.log(
-        "[AuthContext] No app token or stored user found in localStorage."
-      );
+      // console.log(
+      //   "[AuthContext] No app token or stored user found in localStorage."
+      // );
     }
     setIsLoading(false);
   }, []);
 
   const login = async (tokenRes: TokenResponse) => {
-    console.log(
-      "[AuthContext] login started with google tokenResponse:",
-      tokenRes
-    );
+    // console.log(
+    //   "[AuthContext] login started with google tokenResponse:",
+    //   tokenRes
+    // );
     setIsLoading(true);
     if (!tokenRes.access_token) {
-      console.error("[AuthContext] Google tokenResponse missing access_token.");
+      // console.error("[AuthContext] Google tokenResponse missing access_token.");
       setIsAuthenticated(false);
       setUser(null);
       setIsLoading(false);
@@ -105,18 +105,18 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       if (!googleId || !email) throw new Error("Invalid Google profile data.");
 
       const backendPayload = { googleId, email };
-      console.log(
-        "[AuthContext] Calling backend /upsert-google-user with:",
-        backendPayload
-      );
+      // console.log(
+      //   "[AuthContext] Calling backend /upsert-google-user with:",
+      //   backendPayload
+      // );
       const backendResponse = await axios.post(
         `${API_BASE_URL}/api/auth/users/upsert-google-user`,
         backendPayload
       );
-      console.log(
-        "[AuthContext] Backend upsert response:",
-        backendResponse.data
-      );
+      // console.log(
+      //   "[AuthContext] Backend upsert response:",
+      //   backendResponse.data
+      // );
 
       // Backend now sends { message, user: { mongoId, googleId, email, createdAt }, token }
       if (
@@ -127,14 +127,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         const appUser: AppUser = backendResponse.data.user; // This is our AppUser DTO from backend
         const appAuthToken: string = backendResponse.data.token;
 
-        console.log(
-          "[AuthContext] Login successful. Setting app user:",
-          appUser,
-          "appJWT:",
-          appAuthToken,
-          "googleAccessToken:",
-          googleApiAccessToken
-        );
+        // console.log(
+        //   "[AuthContext] Login successful. Setting app user:",
+        //   appUser,
+        //   "appJWT:",
+        //   appAuthToken,
+        //   "googleAccessToken:",
+        //   googleApiAccessToken
+        // );
         setUser(appUser);
         setIsAuthenticated(true);
         localStorage.setItem(APP_USER_KEY, JSON.stringify(appUser));
@@ -147,7 +147,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         );
       }
     } catch (error) {
-      console.error("[AuthContext] Error during login process:", error);
+      // console.error("[AuthContext] Error during login process:", error);
       // ... (error handling as before, ensure storage is cleared) ...
       setUser(null);
       setIsAuthenticated(false);
@@ -161,7 +161,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   };
 
   const logout = () => {
-    console.log("[AuthContext] logout initiated.");
+    // console.log("[AuthContext] logout initiated.");
     googleLogout();
     setUser(null);
     setIsAuthenticated(false);
@@ -170,9 +170,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     localStorage.removeItem(APP_IS_AUTHENTICATED_KEY);
     localStorage.removeItem(GOOGLE_ACCESS_TOKEN_KEY);
     // localStorage.clear(); // Be cautious with clear(), it removes everything
-    console.log(
-      "[AuthContext] User logged out. All relevant local storage cleared."
-    );
+    // console.log(
+    //   "[AuthContext] User logged out. All relevant local storage cleared."
+    // );
   };
 
   const getAuthToken = (): string | null => {
@@ -184,7 +184,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   };
 
   const triggerMemoriesRefresh = () => {
-    console.log("[AuthContext] Triggering memories refresh...");
+    // console.log("[AuthContext] Triggering memories refresh...");
     setMemoriesVersion((prevVersion) => prevVersion + 1);
   }; // New function
 

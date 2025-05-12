@@ -17,12 +17,12 @@ export function CalendarTab() {
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    console.log("[CalendarTab] Initial auth state: ", {
-      isAuthenticated,
-      isAuthLoading,
-      user: !!user,
-      hasGoogleToken: !!getGoogleAccessToken(),
-    });
+    // console.log("[CalendarTab] Initial auth state: ", {
+    //   isAuthenticated,
+    //   isAuthLoading,
+    //   user: !!user,
+    //   hasGoogleToken: !!getGoogleAccessToken(),
+    // });
 
     if (!isAuthenticated || isAuthLoading || !user) {
       if (!isAuthLoading && !isAuthenticated && user === null) {
@@ -46,7 +46,7 @@ export function CalendarTab() {
       setIsLoadingEvents(true);
       setError(null);
       try {
-        console.log("[CalendarTab] Fetching calendar events...");
+        // console.log("[CalendarTab] Fetching calendar events...");
         const fetchedEvents = await fetchCalendarEvents(googleToken);
         setEvents(fetchedEvents || []);
       } catch (err: unknown) {

@@ -12,18 +12,18 @@ export function GoogleSignInButton({ onAuthError }: GoogleSignInButtonProps) {
   const auth = useAuth();
   const handleGoogleLogin = useGoogleLogin({
     onSuccess: async (tokenResponse) => {
-      console.log(
-        "[GoogleSignInButton] Google Login Raw Success. tokenResponse:",
-        tokenResponse
-      );
+      // console.log(
+      //   "[GoogleSignInButton] Google Login Raw Success. tokenResponse:",
+      //   tokenResponse
+      // );
       if (auth && typeof auth.login === "function") {
-        console.log("[GoogleSignInButton] Calling auth.login()...");
+        // console.log("[GoogleSignInButton] Calling auth.login()...");
         try {
           await auth.login(tokenResponse);
-          console.log("[GoogleSignInButton] auth.login() completed.");
+          // console.log("[GoogleSignInButton] auth.login() completed.");
           // Log the JWT after successful login
           const jwtToken = auth.getAuthToken();
-          console.log("[GoogleSignInButton] JWT Token:", jwtToken);
+          // console.log("[GoogleSignInButton] JWT Token:", jwtToken);
         } catch (error) {
           console.error(
             "[GoogleSignInButton] Error during auth.login():",
@@ -34,18 +34,18 @@ export function GoogleSignInButton({ onAuthError }: GoogleSignInButtonProps) {
           }
         }
       } else {
-        console.error(
-          "[GoogleSignInButton] auth.login is not available or not a function."
-        );
+        // console.error(
+        //   "[GoogleSignInButton] auth.login is not available or not a function."
+        // );
         if (onAuthError) {
           onAuthError();
         }
       }
     },
     onError: () => {
-      console.error(
-        "[GoogleSignInButton] Google Login Failed via useGoogleLogin onError."
-      );
+      // console.error(
+      //   "[GoogleSignInButton] Google Login Failed via useGoogleLogin onError."
+      // );
       if (onAuthError) {
         onAuthError();
       }
@@ -56,9 +56,9 @@ export function GoogleSignInButton({ onAuthError }: GoogleSignInButtonProps) {
   return (
     <Button
       onClick={() => {
-        console.log(
-          "[GoogleSignInButton] Clicked. Calling handleGoogleLogin()..."
-        );
+        // console.log(
+        //   "[GoogleSignInButton] Clicked. Calling handleGoogleLogin()..."
+        // );
         handleGoogleLogin();
       }}
       variant="outline"

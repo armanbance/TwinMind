@@ -15,11 +15,11 @@ apiClient.interceptors.request.use(
     if (token) {
       config.headers["Authorization"] = `Bearer ${token}`;
     }
-    console.log("[apiClient] Request Config:", config);
+    // console.log("[apiClient] Request Config:", config);
     return config;
   },
   (error) => {
-    console.error("[apiClient] Request Error Interceptor:", error);
+    // console.error("[apiClient] Request Error Interceptor:", error);
     return Promise.reject(error);
   }
 );
@@ -27,19 +27,19 @@ apiClient.interceptors.request.use(
 // Optional: Interceptor for responses, e.g., to handle global 401 errors
 apiClient.interceptors.response.use(
   (response) => {
-    console.log("[apiClient] Response Data:", response.data);
+    // console.log("[apiClient] Response Data:", response.data);
     return response;
   },
   (error) => {
-    console.error(
-      "[apiClient] Response Error Interceptor:",
-      error.response?.data || error.message
-    );
+    // console.error(
+    //   "[apiClient] Response Error Interceptor:",
+    //   error.response?.data || error.message
+    // );
     if (error.response && error.response.status === 401) {
       // Handle 401: e.g., redirect to login, call logout from AuthContext
-      console.warn(
-        "[apiClient] Received 401 Unauthorized. Consider logging out user."
-      );
+      // console.warn(
+      //   "[apiClient] Received 401 Unauthorized. Consider logging out user."
+      // );
       // Example: You might want to call a global logout function or event here
       // authContext.logout(); // This would require passing authContext or using an event emitter
       localStorage.removeItem(APP_AUTH_TOKEN_KEY); // Basic cleanup
@@ -97,9 +97,9 @@ export async function transcribeAudioWithClient(
       response.data.memory &&
       triggerMemoriesRefresh
     ) {
-      console.log(
-        "[apiClient] New memory created, calling triggerMemoriesRefresh()."
-      );
+      // console.log(
+      //   "[apiClient] New memory created, calling triggerMemoriesRefresh()."
+      // );
       triggerMemoriesRefresh();
     }
 
@@ -135,10 +135,10 @@ export interface GoogleCalendarEvent {
 export async function fetchCalendarEvents(
   googleAccessToken: string
 ): Promise<GoogleCalendarEvent[]> {
-  console.log(
-    "[apiClient] fetchCalendarEvents called. Using Google Access Token (first 10 chars):",
-    googleAccessToken.substring(0, 10) + "..."
-  );
+  // console.log(
+  //   "[apiClient] fetchCalendarEvents called. Using Google Access Token (first 10 chars):",
+  //   googleAccessToken.substring(0, 10) + "..."
+  // );
   try {
     // apiClient will automatically add your app's JWT for backend authentication
     const response = await apiClient.get<GoogleCalendarEvent[]>(
@@ -151,7 +151,7 @@ export async function fetchCalendarEvents(
     );
     return response.data;
   } catch (error: unknown) {
-    console.error("[apiClient] Error fetching calendar events:", error);
+    // console.error("[apiClient] Error fetching calendar events:", error);
     // Let the calling component handle the error display or further action
     // You might want to throw the error or return a specific error structure
     if (axios.isAxiosError(error) && error.response) {
