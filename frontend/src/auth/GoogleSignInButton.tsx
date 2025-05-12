@@ -12,11 +12,37 @@ export function GoogleSignInButton({ onAuthError }: GoogleSignInButtonProps) {
   const auth = useAuth();
   const handleGoogleLogin = useGoogleLogin({
     onSuccess: async (tokenResponse) => {
-      console.log("Google Login Success from Button:", tokenResponse);
-      await auth.login(tokenResponse);
+      console.log(
+        "[GoogleSignInButton] Google Login Raw Success. tokenResponse:",
+        tokenResponse
+      );
+      if (auth && typeof auth.login === "function") {
+        console.log("[GoogleSignInButton] Calling auth.login()...");
+        try {
+          await auth.login(tokenResponse);
+          console.log("[GoogleSignInButton] auth.login() completed.");
+        } catch (error) {
+          console.error(
+            "[GoogleSignInButton] Error during auth.login():",
+            error
+          );
+          if (onAuthError) {
+            onAuthError();
+          }
+        }
+      } else {
+        console.error(
+          "[GoogleSignInButton] auth.login is not available or not a function."
+        );
+        if (onAuthError) {
+          onAuthError();
+        }
+      }
     },
     onError: () => {
-      console.error("Google Login Failed");
+      console.error(
+        "[GoogleSignInButton] Google Login Failed via useGoogleLogin onError."
+      );
       if (onAuthError) {
         onAuthError();
       }
@@ -26,7 +52,12 @@ export function GoogleSignInButton({ onAuthError }: GoogleSignInButtonProps) {
   });
   return (
     <Button
-      onClick={() => handleGoogleLogin()}
+      onClick={() => {
+        console.log(
+          "[GoogleSignInButton] Clicked. Calling handleGoogleLogin()..."
+        );
+        handleGoogleLogin();
+      }}
       variant="outline"
       size="lg"
       className="text-lg gap-2 shadow-lg hover:shadow-xl transition-shadow"
