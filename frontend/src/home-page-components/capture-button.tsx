@@ -5,7 +5,12 @@ import { transcribeAudioWithClient } from "@/lib/apiClient"; // New import
 import { useAuth } from "@/contexts/AuthContext"; // Assuming path is correct
 
 export function CaptureButton() {
-  const { user, isAuthenticated, isLoading: isAuthLoading } = useAuth();
+  const {
+    user,
+    isAuthenticated,
+    isLoading: isAuthLoading,
+    triggerMemoriesRefresh,
+  } = useAuth();
   const [isRecording, setIsRecording] = useState(false);
   const [isTranscribing, setIsTranscribing] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -74,7 +79,8 @@ export function CaptureButton() {
             // Use the new function that sends JWT via apiClient
             const response = await transcribeAudioWithClient(
               audioBlob,
-              userIdForTranscription
+              userIdForTranscription,
+              triggerMemoriesRefresh
             );
             if (response.error) {
               console.error(

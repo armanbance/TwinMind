@@ -72,7 +72,8 @@ export interface TranscriptionResponse {
 
 export async function transcribeAudioWithClient(
   audioBlob: Blob,
-  userId: string // userId is still needed to confirm user is logged in on client, but not sent in form data
+  userId: string, // userId is still needed to confirm user is logged in on client, but not sent in form data
+  triggerMemoriesRefresh?: () => void // Add triggerMemoriesRefresh as an optional parameter
 ): Promise<TranscriptionResponse> {
   console.log(
     "[transcribeAudioWithClient] called for userId (client-side check):",
@@ -89,6 +90,19 @@ export async function transcribeAudioWithClient(
       formData,
       { headers: { "Content-Type": "multipart/form-data" } } // Keep for FormData
     );
+
+    // After successfully creating a new memory, trigger the refresh if the function is provided
+    if (
+      response.status === 201 &&
+      response.data.memory &&
+      triggerMemoriesRefresh
+    ) {
+      console.log(
+        "[apiClient] New memory created, calling triggerMemoriesRefresh()."
+      );
+      triggerMemoriesRefresh();
+    }
+
     return response.data;
   } catch (error: unknown) {
     if (axios.isAxiosError(error) && error.response) {

@@ -38,6 +38,7 @@ export function MemoriesTab() {
     useState<number | null>(null);
 
   const auth = useAuth();
+  const { memoriesVersion } = auth;
 
   useEffect(() => {
     async function fetchMemories() {
@@ -91,7 +92,7 @@ export function MemoriesTab() {
       }
     }
     fetchMemories();
-  }, [auth, auth.isAuthenticated]);
+  }, [auth, auth.isAuthenticated, memoriesVersion]);
 
   const handleAskAISubmit = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
@@ -234,8 +235,7 @@ export function MemoriesTab() {
                 <p className="whitespace-pre-wrap">{aiAnswer}</p>
                 {retrievedMemoriesCountForAsk !== null && (
                   <p className="text-xs text-muted-foreground mt-2">
-                    (Answer based on {retrievedMemoriesCountForAsk} relevant
-                    memory snippet
+                    (Answer based on relevant memory snippets from the past
                     {retrievedMemoriesCountForAsk === 1 ? "" : "s"})
                   </p>
                 )}

@@ -28,6 +28,8 @@ interface AuthContextType {
   logout: () => void;
   getAuthToken: () => string | null; // Function to retrieve the auth token
   getGoogleAccessToken: () => string | null; // Google's access token
+  memoriesVersion: number; // New: for triggering refetch
+  triggerMemoriesRefresh: () => void; // New: function to trigger refetch
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
@@ -43,7 +45,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return localStorage.getItem(APP_IS_AUTHENTICATED_KEY) === "true";
   });
   const [isLoading, setIsLoading] = useState<boolean>(true);
-  // No need to store the raw Google tokenResponse in context state long-term
+  const [memoriesVersion, setMemoriesVersion] = useState<number>(0); // New state
 
   useEffect(() => {
     console.log("[AuthContext] useEffect: Attempting to restore session...");
@@ -181,6 +183,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return localStorage.getItem(GOOGLE_ACCESS_TOKEN_KEY);
   };
 
+  const triggerMemoriesRefresh = () => {
+    console.log("[AuthContext] Triggering memories refresh...");
+    setMemoriesVersion((prevVersion) => prevVersion + 1);
+  }; // New function
+
   return (
     <AuthContext.Provider
       value={{
@@ -191,6 +198,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         logout,
         getAuthToken,
         getGoogleAccessToken,
+        memoriesVersion, // Provide new state
+        triggerMemoriesRefresh, // Provide new function
       }}
     >
       {children}
