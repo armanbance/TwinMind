@@ -55,7 +55,7 @@ mongoose
 
 // CORS configuration
 const corsOptions = {
-  origin: "http://localhost:3000", // Allow requests from your frontend
+  origin: process.env.FRONTEND_URL, // Allow requests from your frontend
   optionsSuccessStatus: 200, // Some legacy browsers (IE11, various SmartTVs) choke on 204
 };
 
