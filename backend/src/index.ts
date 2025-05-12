@@ -119,7 +119,35 @@ const upload = multer({
       cb(null, { fieldName: file.fieldname });
     },
     key: function (req, file, cb) {
-      const extension = path.extname(file.originalname) || ".webm";
+      // Get the correct extension from the file's mimetype or original filename
+      let extension = "";
+      if (file.originalname) {
+        extension = path.extname(file.originalname);
+      }
+
+      if (!extension && file.mimetype) {
+        // Map MIME types to extensions if the file doesn't have one
+        const mimeToExt: Record<string, string> = {
+          "audio/webm": ".webm",
+          "audio/mp4": ".mp4",
+          "audio/m4a": ".m4a",
+          "audio/mpeg": ".mp3",
+          "audio/ogg": ".ogg",
+          "audio/wav": ".wav",
+          "audio/x-wav": ".wav",
+        };
+        extension = mimeToExt[file.mimetype] || ".bin";
+      }
+
+      // Default to .webm if no extension was found
+      if (!extension) {
+        extension = ".webm";
+      }
+
+      console.log(
+        `Processing upload with mimetype: ${file.mimetype}, using extension: ${extension}`
+      );
+
       cb(null, `audio-uploads/${Date.now().toString()}${extension}`);
     },
   }),

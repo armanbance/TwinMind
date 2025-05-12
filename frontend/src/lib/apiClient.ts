@@ -73,14 +73,15 @@ export interface TranscriptionResponse {
 export async function transcribeAudioWithClient(
   audioBlob: Blob,
   userId: string, // userId is still needed to confirm user is logged in on client, but not sent in form data
-  triggerMemoriesRefresh?: () => void // Add triggerMemoriesRefresh as an optional parameter
+  triggerMemoriesRefresh?: () => void, // Add triggerMemoriesRefresh as an optional parameter
+  filename: string = "audio.webm" // Add optional filename parameter with default
 ): Promise<TranscriptionResponse> {
   console.log(
     "[transcribeAudioWithClient] called for userId (client-side check):",
     userId
   );
   const formData = new FormData();
-  formData.append("audio", audioBlob, "audio.webm");
+  formData.append("audio", audioBlob, filename);
   // formData.append('userId', userId); // REMOVED - userId now comes from JWT on backend
 
   try {
