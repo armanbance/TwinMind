@@ -25,10 +25,10 @@ export function CaptureButton() {
     const checkMimeTypeSupport = () => {
       // Order of preference (most desired to least)
       const mimeTypes = [
+        "audio/wav",
         "audio/webm",
         "audio/mp4",
         "audio/ogg",
-        "audio/wav",
         "audio/mp3",
       ];
 
@@ -77,9 +77,11 @@ export function CaptureButton() {
 
         try {
           mediaRecorderRef.current = new MediaRecorder(stream, recorderOptions);
-        } catch (mimeError) {
+        } catch (error) {
           console.warn(
-            `[CaptureButton] Failed with mime type ${supportedMimeType}, trying without specific type`
+            `[CaptureButton] Failed with mime type ${supportedMimeType}, trying without specific type. Error: ${
+              (error as Error).message
+            }`
           );
           // If fails with specific MIME type, try without it (browser will use default)
           mediaRecorderRef.current = new MediaRecorder(stream);
@@ -94,7 +96,7 @@ export function CaptureButton() {
           const actualMimeType =
             mediaRecorderRef.current?.mimeType ||
             supportedMimeType ||
-            "audio/webm";
+            "audio/wav"; // Default to WAV
           const audioBlob = new Blob(audioChunksRef.current, {
             type: actualMimeType,
           });
@@ -139,7 +141,8 @@ export function CaptureButton() {
 
           try {
             // Use the actual MIME type extension for the filename
-            const extension = actualMimeType.split("/")[1] || "webm";
+            const mimeTypeWithoutCodec = actualMimeType.split(";")[0]; // e.g., "audio/webm" from "audio/webm;codecs=opus"
+            const extension = mimeTypeWithoutCodec.split("/")[1] || "wav"; // Default extension to wav
             const filename = `audio.${extension}`;
 
             // Use the new function that sends JWT via apiClient

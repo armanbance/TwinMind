@@ -26,7 +26,7 @@ export async function transcribeAudio(
   const formData = new FormData();
   // Ensure the filename has an extension, as Whisper might rely on it, or the backend multer setup.
   // Using .webm as a default as it's a common format from MediaRecorder.
-  formData.append("audio", audioBlob, "audio.webm");
+  formData.append("audio", audioBlob, "audio.wav");
   formData.append("userId", userId);
 
   try {

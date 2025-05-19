@@ -74,7 +74,7 @@ export async function transcribeAudioWithClient(
   audioBlob: Blob,
   userId: string, // userId is still needed to confirm user is logged in on client, but not sent in form data
   triggerMemoriesRefresh?: () => void, // Add triggerMemoriesRefresh as an optional parameter
-  filename: string = "audio.webm" // Add optional filename parameter with default
+  filename: string = "audio.wav" // Changed default filename to audio.wav
 ): Promise<TranscriptionResponse> {
   console.log(
     "[transcribeAudioWithClient] called for userId (client-side check):",

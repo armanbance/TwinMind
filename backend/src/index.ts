@@ -56,6 +56,7 @@ mongoose
 // CORS configuration
 const corsOptions = {
   origin: process.env.FRONTEND_URL, // Allow requests from your frontend
+  // origin: "http://localhost:3000",
   optionsSuccessStatus: 200, // Some legacy browsers (IE11, various SmartTVs) choke on 204
 };
 
@@ -122,7 +123,8 @@ const upload = multer({
       // Get the correct extension from the file's mimetype or original filename
       let extension = "";
       if (file.originalname) {
-        extension = path.extname(file.originalname);
+        let rawExtension = path.extname(file.originalname); // e.g., .webm or .webm;codecs=opus
+        extension = rawExtension.split(";")[0]; // Take only the part before any semicolon
       }
 
       if (!extension && file.mimetype) {
@@ -136,12 +138,16 @@ const upload = multer({
           "audio/wav": ".wav",
           "audio/x-wav": ".wav",
         };
-        extension = mimeToExt[file.mimetype] || ".bin";
+        // Only use mapped extension if found, otherwise keep extension empty to hit the final default
+        if (mimeToExt[file.mimetype]) {
+          extension = mimeToExt[file.mimetype];
+        }
       }
 
-      // Default to .webm if no extension was found
-      if (!extension) {
-        extension = ".webm";
+      // Default to .wav if no valid extension was found by other means
+      if (!extension || extension === ".bin") {
+        // also catch .bin as an invalid extension for whisper
+        extension = ".wav";
       }
 
       console.log(
@@ -191,8 +197,14 @@ app.post(
         throw new Error("Failed to get S3 key from uploaded file");
       }
 
-      // Create a temporary file to store the audio
-      const tempFilePath = path.join(os.tmpdir(), `${Date.now()}.webm`);
+      // Determine the file extension from the S3 key
+      const fileExtension = path.extname(s3Key) || ".wav"; // Default to .wav if no extension found
+
+      // Create a temporary file to store the audio with the correct extension
+      const tempFilePath = path.join(
+        os.tmpdir(),
+        `${Date.now()}${fileExtension}`
+      );
 
       // Download the file from S3
       const getObjectParams = {
