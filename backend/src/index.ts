@@ -10,6 +10,7 @@ import jwt from "jsonwebtoken"; // Import jsonwebtoken
 import User from "./models/user.model"; // Import the User model
 import Memory, { IMemory } from "./models/memory.model"; // Import the Memory model and its interface
 import { google } from "googleapis"; // Import googleapis
+import { exec } from "child_process"; // Added for ffmpeg
 import {
   getPineconeIndex,
   OPENAI_EMBEDDING_MODEL,
@@ -20,6 +21,7 @@ import multerS3 from "multer-s3";
 import { GetObjectCommand } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import os from "os";
+import Meeting from "./models/meeting.model"; // Import the new Meeting model
 
 dotenv.config();
 
@@ -56,7 +58,6 @@ mongoose
 // CORS configuration
 const corsOptions = {
   origin: process.env.FRONTEND_URL, // Allow requests from your frontend
-  // origin: "http://localhost:3000",
   optionsSuccessStatus: 200, // Some legacy browsers (IE11, various SmartTVs) choke on 204
 };
 
@@ -584,33 +585,568 @@ app.post(
   }
 );
 
-// Endpoint to fetch all memories for the authenticated user
+// Endpoint to fetch all meetings for the authenticated user
 app.get(
-  "/api/memories",
+  "/api/meetings",
   authenticateToken,
   async (req: AuthenticatedRequest, res: express.Response): Promise<void> => {
     const userIdFromToken = req.userAuth?.userId;
 
     if (!userIdFromToken) {
-      // This case should ideally be caught by authenticateToken, but good for defense
+      res
+        .status(401)
+        .json({ error: "Authentication error: User ID not found." });
+      return;
+    }
+
+    try {
+      // Fetch meetings, sort by most recent startTime by default
+      const meetings = await Meeting.find({ userId: userIdFromToken })
+        .sort({ startTime: -1 })
+        .select("-transcriptChunks"); // Exclude bulky transcriptChunks by default
+      // Frontend can fetch full transcript for a specific meeting if needed
+
+      res.status(200).json(meetings);
+    } catch (error: any) {
+      console.error(
+        `[User ${userIdFromToken}] Error fetching meetings:`,
+        error
+      );
+      res.status(500).json({
+        error: "Failed to fetch meetings.",
+        details: error.message,
+      });
+    }
+  }
+);
+
+// Endpoint to fetch a single meeting with full details (including transcript)
+app.get(
+  "/api/meetings/:meetingId",
+  authenticateToken,
+  async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+    const userIdFromToken = req.userAuth?.userId;
+    const { meetingId } = req.params;
+
+    if (!userIdFromToken) {
+      res
+        .status(401)
+        .json({ error: "Authentication error: User ID not found." });
+      return;
+    }
+    if (!mongoose.Types.ObjectId.isValid(meetingId)) {
+      res.status(400).json({ error: "Invalid meeting ID format." });
+      return;
+    }
+
+    try {
+      const meeting = await Meeting.findById(meetingId);
+
+      if (!meeting) {
+        res.status(404).json({ error: "Meeting not found." });
+        return;
+      }
+      if (meeting.userId.toString() !== userIdFromToken) {
+        res
+          .status(403)
+          .json({ error: "User not authorized to view this meeting." });
+        return;
+      }
+
+      // Return the full meeting document, including transcriptChunks and fullTranscriptText
+      res.status(200).json(meeting);
+    } catch (error: any) {
+      console.error(
+        `[User ${userIdFromToken}] Error fetching meeting ${meetingId}:`,
+        error
+      );
+      res.status(500).json({
+        error: "Failed to fetch meeting details.",
+        details: error.message,
+      });
+    }
+  }
+);
+
+// NEW ENDPOINT: Ask AI about a specific meeting's transcript
+app.post(
+  "/api/meetings/:meetingId/ask-ai",
+  authenticateToken,
+  async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+    const { meetingId } = req.params;
+    const { question } = req.body;
+    const userIdFromToken = req.userAuth?.userId;
+
+    if (!userIdFromToken) {
       res
         .status(401)
         .json({ error: "Authentication error: User ID not found in token." });
       return;
     }
 
+    if (!mongoose.Types.ObjectId.isValid(meetingId)) {
+      res.status(400).json({ error: "Invalid meeting ID format." });
+      return;
+    }
+
+    if (!question || typeof question !== "string" || question.trim() === "") {
+      res.status(400).json({ error: "Question is required." });
+      return;
+    }
+
     try {
-      const memories = await Memory.find({ userId: userIdFromToken }).sort({
-        createdAt: -1,
-      }); // Sort by newest first
-      res.status(200).json(memories);
+      const meeting = await Meeting.findById(meetingId);
+
+      if (!meeting) {
+        res.status(404).json({ error: "Meeting not found." });
+        return;
+      }
+
+      if (meeting.userId.toString() !== userIdFromToken) {
+        res.status(403).json({
+          error: "Forbidden: You do not have access to this meeting.",
+        });
+        return;
+      }
+
+      if (meeting.status !== "completed") {
+        res
+          .status(400)
+          .json({ error: "Cannot ask AI about an incomplete meeting." });
+        return;
+      }
+
+      if (
+        !meeting.fullTranscriptText ||
+        meeting.fullTranscriptText.trim() === ""
+      ) {
+        res
+          .status(400)
+          .json({ error: "Meeting transcript is empty or not available." });
+        return;
+      }
+
+      const systemPrompt = `You are an intelligent assistant. Based *only* on the provided meeting transcript, answer the user's question. Do not use any external knowledge or make assumptions beyond what is stated in the transcript. If the answer cannot be found in the transcript, clearly state that the information is not available in the provided text.`;
+
+      const userMessageContent = `Meeting Transcript:\n---\n${meeting.fullTranscriptText}\n---\n\nUser's Question: ${question}`;
+
+      const completion = await openai.chat.completions.create({
+        model: "gpt-3.5-turbo",
+        messages: [
+          { role: "system", content: systemPrompt },
+          { role: "user", content: userMessageContent },
+        ],
+        temperature: 0.2,
+      });
+
+      let aiAnswer = completion.choices[0]?.message?.content?.trim();
+
+      if (aiAnswer && aiAnswer.trim() !== "") {
+        res.status(200).json({ answer: aiAnswer });
+      } else {
+        res.status(500).json({ error: "AI did not return a valid answer." });
+      }
+    } catch (error: any) {
+      console.error(`Error in /api/meetings/${meetingId}/ask-ai:`, error);
+      if (error instanceof OpenAI.APIError) {
+        res
+          .status(error.status || 500)
+          .json({ error: `OpenAI API Error: ${error.message}` });
+        return;
+      }
+      res
+        .status(500)
+        .json({ error: "Internal server error processing your question." });
+      return;
+    }
+  }
+);
+
+// Modified endpoint for transcribing and saving audio chunks to a specific meeting
+app.post(
+  "/api/meetings/:meetingId/chunk", // Changed route to include meetingId
+  authenticateToken,
+  upload.single("audio"),
+  async (req: AuthenticatedRequest, res: express.Response): Promise<void> => {
+    const userIdFromToken = req.userAuth?.userId;
+    const { meetingId } = req.params;
+
+    console.log(
+      `[Backend /chunk] Endpoint hit for meetingId: ${meetingId}. UserID: ${userIdFromToken}`
+    );
+
+    if (!req.file) {
+      console.log("[Backend /chunk] No audio chunk file uploaded.");
+      res.status(400).json({ error: "No audio chunk uploaded." });
+      return;
+    }
+    console.log(
+      `[Backend /chunk] Received file: ${req.file.originalname}, size: ${
+        req.file.size
+      }, mimetype: ${req.file.mimetype}, s3Key: ${
+        (req.file as Express.MulterS3.File).key
+      }`
+    );
+
+    if (!userIdFromToken) {
+      console.log("[Backend /chunk] Auth error: User ID not found in token.");
+      res
+        .status(401)
+        .json({ error: "Authentication error: User ID not found." });
+      return;
+    }
+    if (!mongoose.Types.ObjectId.isValid(meetingId)) {
+      res.status(400).json({ error: "Invalid meeting ID format." });
+      return;
+    }
+
+    try {
+      const meeting = await Meeting.findById(meetingId);
+      if (!meeting) {
+        res.status(404).json({ error: "Meeting not found." });
+        return;
+      }
+      if (meeting.userId.toString() !== userIdFromToken) {
+        res
+          .status(403)
+          .json({ error: "User not authorized for this meeting." });
+        return;
+      }
+      if (meeting.status !== "active") {
+        res.status(400).json({
+          error: `Meeting is not active (status: ${meeting.status}). Cannot add chunk.`,
+        });
+        return;
+      }
+
+      const s3Key = (req.file as Express.MulterS3.File).key;
+      if (!s3Key) {
+        throw new Error("Failed to get S3 key from uploaded chunk");
+      }
+
+      // Force .wav extension for the temporary file sent to OpenAI
+      const tempFilePath = path.join(os.tmpdir(), `${Date.now()}_chunk.wav`);
+      const getObjectParams = {
+        Bucket: process.env.S3_BUCKET_NAME || "your-bucket-name",
+        Key: s3Key,
+      };
+      const { Body } = await s3.send(new GetObjectCommand(getObjectParams));
+      if (!Body) {
+        throw new Error("Failed to retrieve chunk from S3");
+      }
+      const writeStream = fs.createWriteStream(tempFilePath);
+      // @ts-ignore
+      Body.pipe(writeStream);
+      await new Promise<void>((resolve, reject) => {
+        writeStream.on("finish", resolve);
+        writeStream.on("error", reject);
+      });
+
+      // Convert to WAV using ffmpeg before sending to OpenAI
+      const tempWavPath =
+        tempFilePath.replace(/\.[^/.]+$/, "") + "_converted.wav";
+      console.log(
+        `[Backend /chunk Meeting ${meetingId}] Original temp file: ${tempFilePath}, attempting conversion to: ${tempWavPath}`
+      );
+
+      await new Promise<void>((resolve, reject) => {
+        const command = `ffmpeg -y -i "${tempFilePath}" -ar 16000 -ac 1 -c:a pcm_s16le "${tempWavPath}"`;
+        console.log(
+          `[Backend /chunk Meeting ${meetingId}] Executing ffmpeg: ${command}`
+        );
+        exec(command, (error: Error | null, stdout: string, stderr: string) => {
+          if (error) {
+            console.error(
+              `[Backend /chunk Meeting ${meetingId}] ffmpeg conversion error: ${error.message}`
+            );
+            console.error(
+              `[Backend /chunk Meeting ${meetingId}] ffmpeg stderr: ${stderr}`
+            );
+            // Attempt to delete temp files even if ffmpeg fails to prevent clutter
+            try {
+              if (fs.existsSync(tempFilePath)) fs.unlinkSync(tempFilePath);
+              if (fs.existsSync(tempWavPath)) fs.unlinkSync(tempWavPath);
+            } catch (cleanupError: any) {
+              console.error(
+                `[Backend /chunk Meeting ${meetingId}] Error during cleanup after ffmpeg failure: ${cleanupError.message}`
+              );
+            }
+            return reject(
+              new Error(
+                `ffmpeg conversion failed: ${error.message} STDErr: ${stderr}`
+              )
+            ); // Include stderr in reject
+          }
+          // Check if the output file was actually created and has size
+          if (
+            !fs.existsSync(tempWavPath) ||
+            fs.statSync(tempWavPath).size === 0
+          ) {
+            console.error(
+              `[Backend /chunk Meeting ${meetingId}] ffmpeg created an empty or missing output file: ${tempWavPath}`
+            );
+            console.error(
+              `[Backend /chunk Meeting ${meetingId}] ffmpeg stdout: ${stdout}`
+            );
+            console.error(
+              `[Backend /chunk Meeting ${meetingId}] ffmpeg stderr: ${stderr}`
+            );
+            try {
+              if (fs.existsSync(tempFilePath)) fs.unlinkSync(tempFilePath);
+              if (fs.existsSync(tempWavPath)) fs.unlinkSync(tempWavPath);
+            } catch (cleanupError: any) {
+              console.error(
+                `[Backend /chunk Meeting ${meetingId}] Error during cleanup after empty output: ${cleanupError.message}`
+              );
+            }
+            return reject(
+              new Error(
+                `ffmpeg created an empty or missing output file. STDErr: ${stderr} STDOUT: ${stdout}`
+              )
+            );
+          }
+          console.log(
+            `[Backend /chunk Meeting ${meetingId}] ffmpeg conversion successful to ${tempWavPath}. STDOUT: ${stdout}`
+          );
+          resolve();
+        });
+      });
+
+      const transcriptionResponse = await openai.audio.transcriptions.create({
+        model: "whisper-1",
+        file: fs.createReadStream(tempWavPath), // Use the converted WAV file
+      });
+
+      fs.unlinkSync(tempFilePath); // Delete the original temporary S3 download
+      if (fs.existsSync(tempWavPath)) {
+        // Delete the temporary WAV file
+        fs.unlinkSync(tempWavPath);
+      }
+
+      const transcribedText = transcriptionResponse.text;
+      console.log(
+        `[Backend /chunk Meeting ${meetingId}] OpenAI transcription result: "${transcribedText}" (Length: ${transcribedText?.length})`
+      );
+
+      if (transcribedText && transcribedText.trim().length > 0) {
+        const newChunkOrder = meeting.transcriptChunks.length;
+        meeting.transcriptChunks.push({
+          order: newChunkOrder,
+          text: transcribedText,
+          timestamp: new Date(),
+        });
+        // The pre-save hook on the Meeting model will update fullTranscriptText
+        await meeting.save();
+        console.log(
+          `[Backend /chunk Meeting ${meetingId}] Chunk ${newChunkOrder} SAVED. Text: ${transcribedText.substring(
+            0,
+            50
+          )}...`
+        );
+      } else {
+        console.log(
+          `[Backend /chunk Meeting ${meetingId}] Transcription resulted in empty text. Chunk NOT SAVED.`
+        );
+      }
+
+      // Respond with the text of the current chunk for live frontend update
+      res.status(200).json({ transcription: transcribedText });
     } catch (error: any) {
       console.error(
-        `[Backend /api/memories] Error fetching memories for user ${userIdFromToken}:`,
+        `[Meeting ${meetingId}] Error transcribing/saving audio chunk:`,
         error
       );
+      let errorMessage = "Failed to process audio chunk.";
+      if (error.response?.data?.error?.message) {
+        errorMessage = error.response.data.error.message;
+      } else if (error.message) {
+        errorMessage = error.message;
+      }
+      res.status(500).json({ error: errorMessage, details: error.message });
+    }
+  }
+);
+
+// Endpoint to start a new meeting
+app.post(
+  "/api/meetings/start",
+  authenticateToken,
+  async (req: AuthenticatedRequest, res: express.Response): Promise<void> => {
+    const userIdFromToken = req.userAuth?.userId;
+
+    if (!userIdFromToken) {
+      res
+        .status(401)
+        .json({ error: "Authentication error: User ID not found." });
+      return;
+    }
+
+    try {
+      const newMeeting = new Meeting({
+        userId: userIdFromToken,
+        startTime: new Date(),
+        status: "active",
+        transcriptChunks: [], // Initialize with empty chunks
+      });
+
+      await newMeeting.save();
+
+      res.status(201).json({
+        message: "Meeting started successfully.",
+        meetingId: newMeeting._id,
+      });
+    } catch (error: any) {
+      console.error("Error starting new meeting:", error);
       res.status(500).json({
-        error: "Failed to fetch memories.",
+        error: "Failed to start new meeting.",
+        details: error.message,
+      });
+    }
+  }
+);
+
+// Endpoint to end a meeting
+app.post(
+  "/api/meetings/:meetingId/end",
+  authenticateToken,
+  async (req: AuthenticatedRequest, res: express.Response): Promise<void> => {
+    const userIdFromToken = req.userAuth?.userId;
+    const { meetingId } = req.params;
+
+    if (!userIdFromToken) {
+      res
+        .status(401)
+        .json({ error: "Authentication error: User ID not found." });
+      return;
+    }
+    if (!mongoose.Types.ObjectId.isValid(meetingId)) {
+      res.status(400).json({ error: "Invalid meeting ID format." });
+      return;
+    }
+
+    try {
+      const meeting = await Meeting.findById(meetingId);
+      if (!meeting) {
+        res.status(404).json({ error: "Meeting not found." });
+        return;
+      }
+      if (meeting.userId.toString() !== userIdFromToken) {
+        res
+          .status(403)
+          .json({ error: "User not authorized for this meeting." });
+        return;
+      }
+      if (meeting.status === "completed") {
+        res.status(400).json({ error: "Meeting has already been completed." });
+        return;
+      }
+
+      meeting.status = "completed";
+      meeting.endTime = new Date();
+      // The pre-save hook should ensure fullTranscriptText is up-to-date if any final chunks were added
+      await meeting.save(); // Save once to finalize endTime and transcript before summary
+
+      // --- Summary Generation ---
+      if (
+        meeting.fullTranscriptText &&
+        meeting.fullTranscriptText.trim().length > 0
+      ) {
+        try {
+          console.log(
+            `[Meeting ${meetingId}] Generating summary... Transcript length: ${meeting.fullTranscriptText.length}`
+          );
+          const summaryPrompt = `Your task is to generate a structured summary for the following meeting transcript.
+
+First, write a single, concise sentence that provides an overall summary of the meeting's main purpose or outcome. This sentence should stand alone.
+
+After this single sentence, leave a blank line.
+
+Then, provide a more detailed breakdown under the following headings:
+- Main Topics: (List key topics discussed. If none, state "No main topics were discussed.")
+- Decisions: (List specific decisions made. If none, state "No specific decisions were made.")
+- Action Items: (List action items assigned. If none, state "No action items were assigned.")
+
+Transcript:
+---
+${meeting.fullTranscriptText}
+---
+
+Please ensure your entire response follows this structure:
+<Single overall summary sentence>
+
+Main Topics:
+- <topic 1>
+- <topic 2>
+
+Decisions:
+- <decision 1 or "No specific decisions were made.">
+
+Action Items:
+- <action item 1 or "No action items were assigned.">`;
+
+          const summaryCompletion = await openai.chat.completions.create({
+            model: "gpt-3.5-turbo",
+            messages: [
+              {
+                role: "system",
+                content: "You are an expert meeting summarizer.",
+              },
+              { role: "user", content: summaryPrompt },
+            ],
+            temperature: 0.5,
+            max_tokens: 500,
+          });
+
+          let generatedSummary =
+            summaryCompletion.choices[0]?.message?.content?.trim();
+
+          if (generatedSummary && generatedSummary.trim() !== "") {
+            // Prepend "Summary:\n\n" if it doesn't already start with it (case-insensitive)
+            if (!generatedSummary.toLowerCase().startsWith("summary:")) {
+              generatedSummary = "Summary:\n\n" + generatedSummary;
+            }
+            meeting.summary = generatedSummary;
+            await meeting.save(); // Save again with the summary
+            console.log(
+              `[Meeting ${meetingId}] Summary generated, prefixed, and saved.`
+            );
+          } else {
+            console.warn(
+              `[Meeting ${meetingId}] Summary generation resulted in empty or whitespace content. Summary not saved.`
+            );
+            // Optionally, save a default placeholder if generatedSummary is empty
+            // meeting.summary = "Summary could not be generated for this meeting.";
+            // await meeting.save();
+          }
+        } catch (summaryError: any) {
+          console.error(
+            `[Meeting ${meetingId}] Error during summary generation:`,
+            summaryError.message
+          );
+          // Do not block meeting end process due to summary failure, but log it.
+          // Consider adding a specific status or flag to the meeting if summary failed.
+        }
+      } else {
+        console.log(
+          `[Meeting ${meetingId}] Transcript is empty. Skipping summary generation.`
+        );
+      }
+      // --- End Summary Generation ---
+
+      console.log(`[Meeting ${meetingId}] Ended. Status: ${meeting.status}`);
+
+      res.status(200).json({
+        message: "Meeting ended successfully.",
+        meetingId: meeting._id,
+        status: meeting.status,
+      });
+    } catch (error: any) {
+      console.error(`[Meeting ${meetingId}] Error ending meeting:`, error);
+      // If meeting was in a weird state, or DB error
+      // Consider setting meeting status to 'error' if appropriate
+      // await Meeting.findByIdAndUpdate(meetingId, { status: 'error' });
+      res.status(500).json({
+        error: "Failed to end meeting.",
         details: error.message,
       });
     }

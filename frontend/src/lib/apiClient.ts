@@ -115,6 +115,154 @@ export async function transcribeAudioWithClient(
   }
 }
 
+// New function to send audio chunks for transcription
+export async function transcribeAudioChunkWithClient(
+  audioBlob: Blob,
+  userId: string, // Still useful for context/logging, backend validates user against meeting
+  filename: string = "audio_chunk.wav",
+  meetingId: string // New parameter for the meeting ID
+): Promise<TranscriptionResponse> {
+  console.log(
+    `[transcribeAudioChunkWithClient] sending chunk for meetingId: ${meetingId}, userId: ${userId}`
+  );
+  const formData = new FormData();
+  formData.append("audio", audioBlob, filename);
+
+  try {
+    const response = await apiClient.post<TranscriptionResponse>(
+      `/api/meetings/${meetingId}/chunk`, // Updated endpoint
+      formData,
+      { headers: { "Content-Type": "multipart/form-data" } }
+    );
+    return response.data;
+  } catch (error: unknown) {
+    if (axios.isAxiosError(error) && error.response) {
+      return error.response.data as TranscriptionResponse;
+    }
+    return {
+      error: "An unexpected error occurred during chunk transcription.",
+    };
+  }
+}
+
+// New function to start a meeting
+export interface StartMeetingResponse {
+  message?: string;
+  meetingId?: string;
+  error?: string;
+}
+
+export async function startMeeting(): Promise<StartMeetingResponse> {
+  console.log("[apiClient] Attempting to start a new meeting.");
+  try {
+    const response = await apiClient.post<StartMeetingResponse>(
+      "/api/meetings/start"
+    );
+    return response.data;
+  } catch (error: unknown) {
+    if (axios.isAxiosError(error) && error.response) {
+      return error.response.data as StartMeetingResponse;
+    }
+    return {
+      error: "An unexpected error occurred while starting the meeting.",
+    };
+  }
+}
+
+// New function to end a meeting
+export interface EndMeetingResponse {
+  message?: string;
+  meetingId?: string;
+  status?: string;
+  error?: string;
+}
+
+export async function endMeeting(
+  meetingId: string
+): Promise<EndMeetingResponse> {
+  console.log(`[apiClient] Attempting to end meeting: ${meetingId}`);
+  try {
+    const response = await apiClient.post<EndMeetingResponse>(
+      `/api/meetings/${meetingId}/end`
+    );
+    return response.data;
+  } catch (error: unknown) {
+    if (axios.isAxiosError(error) && error.response) {
+      return error.response.data as EndMeetingResponse;
+    }
+    return { error: "An unexpected error occurred while ending the meeting." };
+  }
+}
+
+// Interface for the Meeting object expected from the backend (subset for listing)
+export interface IMeetingSummary {
+  _id: string;
+  userId: string;
+  startTime: string; // Dates are often stringified in JSON
+  endTime?: string;
+  status: "active" | "processing_final_chunk" | "completed" | "error";
+  fullTranscriptText?: string; // Might still be included if not explicitly excluded by select, or for small ones
+  summary?: string;
+  title?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export async function fetchMeetings(): Promise<
+  IMeetingSummary[] | { error: string }
+> {
+  console.log("[apiClient] Fetching meetings.");
+  try {
+    const response = await apiClient.get<IMeetingSummary[]>("/api/meetings");
+    return response.data;
+  } catch (error: unknown) {
+    if (axios.isAxiosError(error) && error.response) {
+      return {
+        error:
+          error.response.data?.error || "Failed to fetch meetings from server.",
+      };
+    }
+    return { error: "An unexpected error occurred while fetching meetings." };
+  }
+}
+
+// Interface for a full Meeting object (includes transcript details)
+// This should align with IMeeting from backend/src/models/meeting.model.ts
+export interface ITranscriptChunk {
+  order: number;
+  text: string;
+  timestamp: string; // Dates are often stringified
+}
+
+export interface IFullMeeting extends IMeetingSummary {
+  // Extends summary, adds more detail
+  transcriptChunks: ITranscriptChunk[];
+  // fullTranscriptText is already optional in IMeetingSummary, will be populated here
+}
+
+export async function fetchFullMeetingDetails(
+  meetingId: string
+): Promise<IFullMeeting | { error: string }> {
+  console.log(`[apiClient] Fetching full details for meeting: ${meetingId}`);
+  try {
+    const response = await apiClient.get<IFullMeeting>(
+      `/api/meetings/${meetingId}`
+    );
+    return response.data;
+  } catch (error: unknown) {
+    if (axios.isAxiosError(error) && error.response) {
+      return {
+        error:
+          error.response.data?.error ||
+          `Failed to fetch details for meeting ${meetingId}.`,
+      };
+    }
+    return {
+      error: `An unexpected error occurred while fetching details for meeting ${meetingId}.`,
+    };
+  }
+}
+
 // New function to fetch calendar events
 export interface GoogleCalendarEvent {
   id?: string | null;
@@ -164,5 +312,35 @@ export async function fetchCalendarEvents(
     throw new Error(
       "An unexpected error occurred while fetching calendar events."
     );
+  }
+}
+
+// Interface for the response from the meeting-specific AI endpoint
+export interface AskMeetingAIResponse {
+  answer?: string;
+  error?: string;
+}
+
+// Function to ask AI about a specific meeting's transcript
+export async function askMeetingAI(
+  meetingId: string,
+  question: string
+): Promise<AskMeetingAIResponse> {
+  console.log(
+    `[apiClient] Asking AI about meeting ${meetingId}, question: "${question}"`
+  );
+  try {
+    const response = await apiClient.post<AskMeetingAIResponse>(
+      `/api/meetings/${meetingId}/ask-ai`,
+      { question } // Send question in the body
+    );
+    return response.data;
+  } catch (error: unknown) {
+    if (axios.isAxiosError(error) && error.response) {
+      return error.response.data as AskMeetingAIResponse;
+    }
+    return {
+      error: "An unexpected error occurred while asking the meeting AI.",
+    };
   }
 }

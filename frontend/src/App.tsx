@@ -4,6 +4,7 @@ import { HomePage } from "./HomePage";
 import { Routes, Route, Navigate } from "react-router-dom";
 import { useAuth } from "./contexts/AuthContext"; // Adjusted path
 import { ProtectedRoute } from "./auth/ProtectedRoute"; // Adjusted path
+import { MeetingDetailPage } from "./pages/MeetingDetailPage"; // Assuming this will be the path
 
 function App() {
   const { isAuthenticated } = useAuth();
@@ -20,6 +21,7 @@ function App() {
         <Route element={<ProtectedRoute />}>
           {/* Routes nested under ProtectedRoute require authentication */}
           <Route path="/home" element={<HomePage />} />
+          <Route path="/meetings/:meetingId" element={<MeetingDetailPage />} />
           {/* Add other protected routes here, e.g., /dashboard, /profile */}
         </Route>
         {/* You can add other public routes here if needed, e.g., /about, /contact */}
