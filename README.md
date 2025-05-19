@@ -1,1 +1,3 @@
 # TwinMind
+
+TwinMind is a web application that helps users capture, store, and interact with their audio memories using modern AI and cloud technologies. Users can record audio directly in the browser, which is then transcribed using OpenAI Whisper and securely stored in AWS S3. Transcriptions are saved in MongoDB, converted into vector embeddings via OpenAI, and indexed in Pinecone to enable semantic search. When a user asks a question, the app retrieves the most relevant memories using vector similarity (RAG pattern) and passes them to GPT-3.5 to generate context-aware answers. The app also includes Google Calendar integration and a memory browser for reviewi
