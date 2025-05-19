@@ -43,6 +43,8 @@ export function CaptureButton({
   >([]);
   const [isAskingLiveAi, setIsAskingLiveAi] = useState(false);
   const [liveAiError, setLiveAiError] = useState<string | null>(null);
+  const currentLiveAiResponseRef = useRef(""); // Ref to accumulate current AI response
+  const liveAiEventSourceControllerRef = useRef<AbortController | null>(null); // To abort fetch if needed
 
   useEffect(() => {
     const checkMimeTypeSupport = () => {
@@ -609,31 +611,73 @@ export function CaptureButton({
       return;
     }
 
+    // If there's an ongoing stream, abort it before starting a new one
+    if (liveAiEventSourceControllerRef.current) {
+      liveAiEventSourceControllerRef.current.abort();
+    }
+    liveAiEventSourceControllerRef.current = new AbortController();
+
     const questionToAsk = liveQuestion;
-    setLiveQuestion(""); // Clear input immediately
+    setLiveQuestion("");
     setIsAskingLiveAi(true);
     setLiveAiError(null);
+    currentLiveAiResponseRef.current = ""; // Reset accumulator
 
-    // Add user's question to chat history optimistically
-    // setLiveAiChatHistory(prev => [...prev, { user: questionToAsk, ai: "Thinking..."}]);
+    // Add user's question and a placeholder for AI's streaming response
+    const newChatHistoryEntry = { user: questionToAsk, ai: "" };
+    setLiveAiChatHistory((prev) => [...prev, newChatHistoryEntry]);
+    const currentChatEntryIndex = liveAiChatHistory.length; // Index of the entry we just added (before state update finishes)
 
-    const result = await askLiveMeetingTranscriptAI(
-      currentMeetingId,
-      questionToAsk
-    );
-
-    if (result.error) {
-      setLiveAiError(result.error);
-      // Remove optimistic message or update it with error
-      // setLiveAiChatHistory(prev => prev.map(item => item.user === questionToAsk && item.ai === "Thinking..." ? { ...item, ai: `Error: ${result.error}` } : item));
-      // For simplicity now, just log error, user can retry.
-    } else if (result.answer) {
-      setLiveAiChatHistory((prev) => [
-        ...prev,
-        { user: questionToAsk, ai: result.answer! },
-      ]);
+    function updateCurrentAiMessage(textChunk: string) {
+      currentLiveAiResponseRef.current += textChunk;
+      setLiveAiChatHistory((prev) =>
+        prev.map((chat, index) =>
+          index === currentChatEntryIndex
+            ? { ...chat, ai: currentLiveAiResponseRef.current }
+            : chat
+        )
+      );
     }
-    setIsAskingLiveAi(false);
+
+    function handleStreamEnd() {
+      setIsAskingLiveAi(false);
+      liveAiEventSourceControllerRef.current = null; // Clear controller
+      console.log("[CaptureButton] Live AI stream ended.");
+    }
+
+    function handleStreamError(errorMessage: string) {
+      setLiveAiError(errorMessage);
+      setLiveAiChatHistory((prev) =>
+        prev.map((chat, index) =>
+          index === currentChatEntryIndex && chat.ai === ""
+            ? { ...chat, ai: `Error: ${errorMessage}` }
+            : chat
+        )
+      );
+      setIsAskingLiveAi(false);
+      liveAiEventSourceControllerRef.current = null; // Clear controller
+    }
+
+    try {
+      // The AbortSignal would be passed to fetch if askLiveMeetingTranscriptAI supported it directly.
+      // For now, manual abort via controller is used before new call.
+      await askLiveMeetingTranscriptAI(
+        currentMeetingId!,
+        questionToAsk,
+        updateCurrentAiMessage,
+        handleStreamEnd,
+        handleStreamError,
+        liveAiEventSourceControllerRef.current?.signal
+      );
+    } catch (error: any) {
+      // This catch is for unexpected errors in invoking askLiveMeetingTranscriptAI itself (e.g., if it wasn't async)
+      // Most errors should be handled by the onError callback passed to it.
+      console.error(
+        "[CaptureButton] Unexpected error calling askLiveMeetingTranscriptAI:",
+        error
+      );
+      handleStreamError("Unexpected system error occurred.");
+    }
   }
 
   const buttonDisabled =

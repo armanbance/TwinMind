@@ -319,72 +319,741 @@ export async function fetchCalendarEvents(
 export interface AskMeetingAIResponse {
   answer?: string;
   error?: string;
+  // No longer just a single answer, but streaming, so this interface might be less relevant
+  // or represent the final accumulated answer if needed elsewhere, though callbacks handle live updates.
 }
 
-// Function to ask AI about a specific meeting's transcript
+// Function to ask AI about a specific meeting's transcript - NOW STREAMING
 export async function askMeetingAI(
   meetingId: string,
-  question: string
-): Promise<AskMeetingAIResponse> {
+  question: string,
+  onChunkReceived: (textChunk: string) => void, // Callback for each text chunk
+  onEnd: () => void, // Callback for when stream ends
+  onError: (errorMessage: string) => void, // Callback for errors
+  signal?: AbortSignal // Optional AbortSignal
+): Promise<void> {
+  // Returns void as data is handled via callbacks
   console.log(
-    `[apiClient] Asking AI about meeting ${meetingId}, question: "${question}"`
+    `[apiClient] Asking AI (streaming) about meeting ${meetingId}, question: "${question}"`
   );
+  const token = localStorage.getItem(APP_AUTH_TOKEN_KEY);
+  if (!token) {
+    onError("No authentication token found.");
+    return;
+  }
+
   try {
-    const response = await apiClient.post<AskMeetingAIResponse>(
-      `/api/meetings/${meetingId}/ask-ai`,
-      { question } // Send question in the body
+    const response = await fetch(
+      `${API_BASE_URL}/api/meetings/${meetingId}/ask-ai`, // Ensure this is the correct endpoint
+      {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json",
+          Accept: "text/event-stream",
+        },
+        body: JSON.stringify({ question }),
+        signal,
+      }
     );
-    return response.data;
-  } catch (error: unknown) {
-    if (axios.isAxiosError(error) && error.response) {
-      return error.response.data as AskMeetingAIResponse;
+
+    if (!response.ok) {
+      try {
+        const errorData = await response.json();
+        const errorMessage =
+          errorData.details ||
+          errorData.error ||
+          `Server responded with ${response.status}`;
+        console.error(
+          "[apiClient] askMeetingAI Server error (not ok):",
+          errorMessage,
+          "Status:",
+          response.status,
+          "Data:",
+          errorData
+        );
+        onError(errorMessage);
+      } catch (e) {
+        console.error(
+          "[apiClient] askMeetingAI Server error (not ok, could not parse JSON body):",
+          response.status
+        );
+        onError(`Server responded with ${response.status}`);
+      }
+      return;
     }
-    return {
-      error: "An unexpected error occurred while asking the meeting AI.",
-    };
+
+    if (!response.body) {
+      console.error("[apiClient] askMeetingAI Response body is null.");
+      onError("Response body is null, cannot read stream.");
+      return;
+    }
+
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+
+    async function processStream() {
+      console.log(
+        "[apiClient] askMeetingAI processStream started. Signal aborted:",
+        signal?.aborted
+      );
+      if (signal?.aborted) {
+        console.log(
+          "[apiClient] askMeetingAI processStream: Request aborted before streaming began."
+        );
+        onError("Request aborted before streaming began.");
+        if (!reader.closed)
+          reader
+            .cancel("Request aborted")
+            .catch((e) =>
+              console.warn(
+                "[apiClient] askMeetingAI Error cancelling reader (pre-stream abort):",
+                e
+              )
+            );
+        return;
+      }
+
+      try {
+        while (true) {
+          if (signal?.aborted) {
+            console.log(
+              "[apiClient] askMeetingAI processStream: Request aborted during streaming loop."
+            );
+            onError("Request aborted during streaming.");
+            if (!reader.closed)
+              reader
+                .cancel("Request aborted")
+                .catch((e) =>
+                  console.warn(
+                    "[apiClient] askMeetingAI Error cancelling reader (mid-stream abort):",
+                    e
+                  )
+                );
+            break;
+          }
+
+          console.log(
+            "[apiClient] askMeetingAI processStream: Calling reader.read()"
+          );
+          const { done, value } = await reader.read();
+          console.log(
+            "[apiClient] askMeetingAI processStream: reader.read() returned. Done:",
+            done
+          );
+
+          if (done) {
+            console.log(
+              "[apiClient] askMeetingAI processStream: Stream done. Final buffer:",
+              buffer
+            );
+            if (buffer.trim()) {
+              try {
+                const jsonString = buffer.replace(/^data: /, "").trim();
+                if (jsonString) {
+                  console.log(
+                    "[apiClient] askMeetingAI processStream (done): Parsing final buffered JSON string:",
+                    jsonString
+                  );
+                  const json = JSON.parse(jsonString);
+                  console.log(
+                    "[apiClient] askMeetingAI processStream (done): Parsed final JSON:",
+                    json
+                  );
+                  if (json.text) {
+                    console.log(
+                      "[apiClient] askMeetingAI processStream (done): Calling onChunkReceived with final text:",
+                      json.text
+                    );
+                    onChunkReceived(json.text);
+                  } else if (json.event === "EOS") {
+                    console.log(
+                      "[apiClient] askMeetingAI processStream (done): EOS event found in final buffer."
+                    );
+                  } else if (json.error) {
+                    const finalErrorMessage = json.details || json.error;
+                    console.error(
+                      "[apiClient] askMeetingAI processStream (done): Error event in final buffer:",
+                      finalErrorMessage
+                    );
+                    onError(finalErrorMessage);
+                    return;
+                  }
+                }
+              } catch (e: any) {
+                console.error(
+                  "[apiClient] askMeetingAI processStream (done): Error parsing final buffered JSON:",
+                  e.message,
+                  "Buffer:",
+                  buffer
+                );
+              }
+            }
+            console.log(
+              "[apiClient] askMeetingAI processStream: Calling onEnd() as stream is done."
+            );
+            onEnd();
+            break;
+          }
+
+          const decodedChunk = decoder.decode(value, { stream: true });
+          console.log(
+            "[apiClient] askMeetingAI processStream: Decoded chunk:",
+            decodedChunk
+          );
+          buffer += decodedChunk;
+          console.log(
+            "[apiClient] askMeetingAI processStream: Current buffer:",
+            buffer
+          );
+
+          let eolIndex;
+          while ((eolIndex = buffer.indexOf("\n\n")) >= 0) {
+            const line = buffer.substring(0, eolIndex).trim();
+            buffer = buffer.substring(eolIndex + 2);
+            console.log(
+              "[apiClient] askMeetingAI processStream: Processing line:",
+              line,
+              "Remaining buffer:",
+              buffer
+            );
+
+            if (line.startsWith("data:")) {
+              const jsonString = line.substring("data:".length).trim();
+              if (jsonString) {
+                console.log(
+                  "[apiClient] askMeetingAI processStream: Parsing JSON string from line:",
+                  jsonString
+                );
+                try {
+                  const json = JSON.parse(jsonString);
+                  console.log(
+                    "[apiClient] askMeetingAI processStream: Parsed JSON:",
+                    json
+                  );
+                  if (json.text) {
+                    console.log(
+                      "[apiClient] askMeetingAI processStream: Calling onChunkReceived with text:",
+                      json.text
+                    );
+                    onChunkReceived(json.text);
+                  } else if (json.event === "EOS") {
+                    console.log(
+                      "[apiClient] askMeetingAI processStream: EOS event received. Stream should close soon."
+                    );
+                  } else if (json.error) {
+                    const streamErrorMessage = json.details || json.error;
+                    console.error(
+                      "[apiClient] askMeetingAI processStream: Error event from stream:",
+                      streamErrorMessage
+                    );
+                    onError(streamErrorMessage);
+                    if (!reader.closed)
+                      reader
+                        .cancel("Error received from server")
+                        .catch((e) =>
+                          console.warn(
+                            "[apiClient] askMeetingAI Error cancelling reader (server error event):",
+                            e
+                          )
+                        );
+                    return;
+                  }
+                } catch (e: any) {
+                  console.error(
+                    "[apiClient] askMeetingAI processStream: Error parsing JSON from stream:",
+                    e.message,
+                    "Line:",
+                    line
+                  );
+                  onError("Error parsing data from stream: " + e.message);
+                  if (!reader.closed)
+                    reader
+                      .cancel("JSON parsing error")
+                      .catch((err) =>
+                        console.warn(
+                          "[apiClient] askMeetingAI Error cancelling reader (JSON parse error):",
+                          err
+                        )
+                      );
+                  return;
+                }
+              } else {
+                console.warn(
+                  "[apiClient] askMeetingAI processStream: Received data: prefix with empty content. Line:",
+                  line
+                );
+              }
+            } else if (line.trim()) {
+              console.warn(
+                "[apiClient] askMeetingAI processStream: Received non-empty line without data: prefix:",
+                line
+              );
+            }
+          }
+        }
+      } catch (loopError: any) {
+        console.error(
+          "[apiClient] askMeetingAI processStream: Error in streaming loop:",
+          loopError.message,
+          "Signal aborted:",
+          signal?.aborted
+        );
+        if (
+          signal?.aborted &&
+          (loopError.name === "AbortError" ||
+            loopError.message.includes("aborted"))
+        ) {
+          console.log(
+            "[apiClient] askMeetingAI processStream: Stream reading aborted as expected."
+          );
+          if (!reader.closed) {
+            onError("Request aborted during data reading.");
+          }
+        } else {
+          onError(
+            "Critical error during AI response reading: " + loopError.message
+          );
+        }
+        if (!reader.closed)
+          reader
+            .cancel("Streaming loop error")
+            .catch((e) =>
+              console.warn(
+                "[apiClient] askMeetingAI Error cancelling reader (loop error):",
+                e
+              )
+            );
+      } finally {
+        console.log(
+          "[apiClient] askMeetingAI processStream: Exiting. Reader closed status:",
+          reader.closed
+        );
+      }
+    }
+
+    processStream().catch((streamError: any) => {
+      console.error(
+        "[apiClient] askMeetingAI processStream Outer Catch: Unhandled error during stream processing:",
+        streamError.message,
+        "Signal aborted:",
+        signal?.aborted
+      );
+      if (
+        signal?.aborted &&
+        (streamError.name === "AbortError" ||
+          streamError.message.includes("aborted"))
+      ) {
+        console.log(
+          "[apiClient] askMeetingAI processStream Outer Catch: Stream processing aborted as expected."
+        );
+      } else {
+        onError(
+          "A critical unhandled error occurred while reading the AI response: " +
+            streamError.message
+        );
+      }
+      if (!reader.closed) {
+        reader
+          .cancel("Outer stream processing error")
+          .catch((cancelError) =>
+            console.warn(
+              "[apiClient] askMeetingAI Error during reader cancellation (outer catch):",
+              cancelError
+            )
+          );
+      }
+    });
+  } catch (error: any) {
+    console.error(
+      "[apiClient] askMeetingAI: Top-level fetch/setup error:",
+      error.message,
+      "Signal aborted:",
+      signal?.aborted
+    );
+    if (
+      signal?.aborted &&
+      (error.name === "AbortError" || error.message.includes("aborted"))
+    ) {
+      console.log(
+        "[apiClient] askMeetingAI: Fetch request was aborted by signal."
+      );
+      onError("Request aborted.");
+    } else {
+      onError(
+        "Failed to initiate connection to the server for AI chat: " +
+          error.message
+      );
+    }
   }
 }
 
 export async function askLiveMeetingTranscriptAI(
   meetingId: string,
-  question: string
-): Promise<{ answer?: string; error?: string }> {
-  // Removed direct token handling as apiClient instance will handle it via interceptor
-  // const token = localStorage.getItem("authToken");
-  // if (!token) return { error: "No authentication token found." };
+  question: string,
+  onChunkReceived: (textChunk: string) => void,
+  onEnd: () => void,
+  onError: (errorMessage: string) => void,
+  signal?: AbortSignal // Add AbortSignal as an optional parameter
+): Promise<void> {
+  // Returns void as data is handled via callbacks
+  const token = localStorage.getItem("appAuthToken");
+  if (!token) {
+    onError("No authentication token found.");
+    return;
+  }
 
   try {
-    // Use the global apiClient instance which has the interceptor
-    const response = await apiClient.post(
-      `/api/meetings/${meetingId}/ask-live-transcript`, // apiClient prepends API_BASE_URL
-      { question },
+    const response = await fetch(
+      `${API_BASE_URL}/api/meetings/${meetingId}/ask-live-transcript`,
       {
+        method: "POST",
         headers: {
-          // Authorization header will be added by the interceptor
-          "Content-Type": "application/json", // Still good to specify for POST
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json",
+          Accept: "text/event-stream", // Important: tell server we can handle SSE
         },
+        body: JSON.stringify({ question }),
+        signal, // Pass the signal to fetch
       }
     );
-    return { answer: response.data.answer };
-  } catch (error: unknown) {
-    if (axios.isAxiosError(error) && error.response) {
-      console.error(
-        "askLiveMeetingTranscriptAI error (axios):",
-        error.response.data
-      );
-      return {
-        error:
-          error.response.data.error ||
-          `Server responded with ${error.response.status}`,
-      };
-    } else if (error instanceof Error) {
-      console.error(
-        "askLiveMeetingTranscriptAI error (generic):",
-        error.message
-      );
-      return { error: error.message };
+
+    if (!response.ok) {
+      try {
+        const errorData = await response.json();
+        const errorMessage =
+          errorData.details ||
+          errorData.error ||
+          `Server responded with ${response.status}`;
+        console.error(
+          "[apiClient] Server error (not ok):",
+          errorMessage,
+          "Status:",
+          response.status,
+          "Data:",
+          errorData
+        );
+        onError(errorMessage);
+      } catch (e) {
+        console.error(
+          "[apiClient] Server error (not ok, could not parse JSON body):",
+          response.status
+        );
+        onError(`Server responded with ${response.status}`);
+      }
+      return;
     }
-    console.error("askLiveMeetingTranscriptAI error (unknown):", error);
-    return { error: "An unknown error occurred." };
+
+    if (!response.body) {
+      console.error("[apiClient] Response body is null.");
+      onError("Response body is null, cannot read stream.");
+      return;
+    }
+
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+
+    async function processStream() {
+      console.log(
+        "[apiClient] processStream started. Signal aborted:",
+        signal?.aborted
+      );
+      if (signal?.aborted) {
+        console.log(
+          "[apiClient] processStream: Request aborted before streaming began."
+        );
+        onError("Request aborted before streaming began.");
+        // reader.cancel() might not be necessary if fetch promise itself was aborted,
+        // but good for completeness if somehow processStream is called with an already aborted signal.
+        if (!reader.closed)
+          reader
+            .cancel("Request aborted")
+            .catch((e) =>
+              console.warn(
+                "[apiClient] Error cancelling reader (pre-stream abort):",
+                e
+              )
+            );
+        return;
+      }
+
+      try {
+        while (true) {
+          if (signal?.aborted) {
+            console.log(
+              "[apiClient] processStream: Request aborted during streaming loop."
+            );
+            onError("Request aborted during streaming.");
+            if (!reader.closed)
+              reader
+                .cancel("Request aborted")
+                .catch((e) =>
+                  console.warn(
+                    "[apiClient] Error cancelling reader (mid-stream abort):",
+                    e
+                  )
+                );
+            break;
+          }
+
+          console.log("[apiClient] processStream: Calling reader.read()");
+          const { done, value } = await reader.read();
+          console.log(
+            "[apiClient] processStream: reader.read() returned. Done:",
+            done
+          );
+
+          if (done) {
+            console.log(
+              "[apiClient] processStream: Stream done. Final buffer:",
+              buffer
+            );
+            if (buffer.trim()) {
+              try {
+                const jsonString = buffer.replace(/^data: /, "").trim();
+                if (jsonString) {
+                  console.log(
+                    "[apiClient] processStream (done): Parsing final buffered JSON string:",
+                    jsonString
+                  );
+                  const json = JSON.parse(jsonString);
+                  console.log(
+                    "[apiClient] processStream (done): Parsed final JSON:",
+                    json
+                  );
+                  if (json.text) {
+                    console.log(
+                      "[apiClient] processStream (done): Calling onChunkReceived with final text:",
+                      json.text
+                    );
+                    onChunkReceived(json.text);
+                  } else if (json.event === "EOS") {
+                    console.log(
+                      "[apiClient] processStream (done): EOS event found in final buffer."
+                    );
+                  } else if (json.error) {
+                    const finalErrorMessage = json.details || json.error;
+                    console.error(
+                      "[apiClient] processStream (done): Error event in final buffer:",
+                      finalErrorMessage
+                    );
+                    onError(finalErrorMessage);
+                    return;
+                  }
+                }
+              } catch (e: any) {
+                console.error(
+                  "[apiClient] processStream (done): Error parsing final buffered JSON:",
+                  e.message,
+                  "Buffer:",
+                  buffer
+                );
+                // onError("Error parsing final part of stream: " + e.message); // Avoid double error if stream just ends.
+              }
+            }
+            console.log(
+              "[apiClient] processStream: Calling onEnd() as stream is done."
+            );
+            onEnd();
+            break;
+          }
+
+          const decodedChunk = decoder.decode(value, { stream: true });
+          console.log(
+            "[apiClient] processStream: Decoded chunk:",
+            decodedChunk
+          );
+          buffer += decodedChunk;
+          console.log("[apiClient] processStream: Current buffer:", buffer);
+
+          let eolIndex;
+          while ((eolIndex = buffer.indexOf("\n\n")) >= 0) {
+            const line = buffer.substring(0, eolIndex).trim();
+            buffer = buffer.substring(eolIndex + 2);
+            console.log(
+              "[apiClient] processStream: Processing line:",
+              line,
+              "Remaining buffer:",
+              buffer
+            );
+
+            if (line.startsWith("data:")) {
+              const jsonString = line.substring("data:".length).trim();
+              if (jsonString) {
+                console.log(
+                  "[apiClient] processStream: Parsing JSON string from line:",
+                  jsonString
+                );
+                try {
+                  const json = JSON.parse(jsonString);
+                  console.log("[apiClient] processStream: Parsed JSON:", json);
+                  if (json.text) {
+                    console.log(
+                      "[apiClient] processStream: Calling onChunkReceived with text:",
+                      json.text
+                    );
+                    onChunkReceived(json.text);
+                  } else if (json.event === "EOS") {
+                    console.log(
+                      "[apiClient] processStream: EOS event received. Stream should close soon."
+                    );
+                    // EOS received. Loop will continue until done=true, then onEnd will be called.
+                  } else if (json.error) {
+                    const streamErrorMessage = json.details || json.error;
+                    console.error(
+                      "[apiClient] processStream: Error event from stream:",
+                      streamErrorMessage
+                    );
+                    onError(streamErrorMessage);
+                    if (!reader.closed)
+                      reader
+                        .cancel("Error received from server")
+                        .catch((e) =>
+                          console.warn(
+                            "[apiClient] Error cancelling reader (server error event):",
+                            e
+                          )
+                        );
+                    return;
+                  }
+                } catch (e: any) {
+                  console.error(
+                    "[apiClient] processStream: Error parsing JSON from stream:",
+                    e.message,
+                    "Line:",
+                    line
+                  );
+                  onError("Error parsing data from stream: " + e.message);
+                  if (!reader.closed)
+                    reader
+                      .cancel("JSON parsing error")
+                      .catch((err) =>
+                        console.warn(
+                          "[apiClient] Error cancelling reader (JSON parse error):",
+                          err
+                        )
+                      );
+                  return;
+                }
+              } else {
+                console.warn(
+                  "[apiClient] processStream: Received data: prefix with empty content. Line:",
+                  line
+                );
+              }
+            } else if (line.trim()) {
+              console.warn(
+                "[apiClient] processStream: Received non-empty line without data: prefix:",
+                line
+              );
+            }
+          }
+        }
+      } catch (loopError: any) {
+        console.error(
+          "[apiClient] processStream: Error in streaming loop:",
+          loopError.message,
+          "Signal aborted:",
+          signal?.aborted
+        );
+        if (
+          signal?.aborted &&
+          (loopError.name === "AbortError" ||
+            loopError.message.includes("aborted"))
+        ) {
+          // This can happen if abort occurs during an await reader.read()
+          console.log(
+            "[apiClient] processStream: Stream reading aborted as expected."
+          );
+          // onError might have already been called by the signal check at loop start.
+          // Ensure it's called if not.
+          if (!reader.closed) {
+            // Check if it wasn't already handled
+            onError("Request aborted during data reading.");
+          }
+        } else {
+          onError(
+            "Critical error during AI response reading: " + loopError.message
+          );
+        }
+        if (!reader.closed)
+          reader
+            .cancel("Streaming loop error")
+            .catch((e) =>
+              console.warn(
+                "[apiClient] Error cancelling reader (loop error):",
+                e
+              )
+            );
+      } finally {
+        console.log(
+          "[apiClient] processStream: Exiting. Reader closed status:",
+          reader.closed
+        );
+        // Ensure reader is always attempted to be closed if not already,
+        // unless an abort signal was the cause and handled it.
+        // onEnd() or onError() should have been called to signal completion/failure.
+      }
+    }
+
+    processStream().catch((streamError: any) => {
+      // This catch is for errors thrown synchronously by processStream itself OR unhandled rejections from its async operations
+      // (though the inner try/catch in processStream should handle most).
+      console.error(
+        "[apiClient] processStream Outer Catch: Unhandled error during stream processing:",
+        streamError.message,
+        "Signal aborted:",
+        signal?.aborted
+      );
+      if (
+        signal?.aborted &&
+        (streamError.name === "AbortError" ||
+          streamError.message.includes("aborted"))
+      ) {
+        console.log(
+          "[apiClient] processStream Outer Catch: Stream processing aborted as expected."
+        );
+        // onError should have been called by now.
+      } else {
+        onError(
+          "A critical unhandled error occurred while reading the AI response: " +
+            streamError.message
+        );
+      }
+      if (!reader.closed) {
+        reader
+          .cancel("Outer stream processing error")
+          .catch((cancelError) =>
+            console.warn(
+              "[apiClient] Error during reader cancellation (outer catch):",
+              cancelError
+            )
+          );
+      }
+    });
+  } catch (error: any) {
+    console.error(
+      "[apiClient] askLiveMeetingTranscriptAI: Top-level fetch/setup error:",
+      error.message,
+      "Signal aborted:",
+      signal?.aborted
+    );
+    if (
+      signal?.aborted &&
+      (error.name === "AbortError" || error.message.includes("aborted"))
+    ) {
+      // Fetch itself was aborted.
+      // onError might not have been called if processStream didn't start.
+      // Ensure onError is called.
+      console.log("[apiClient] Fetch request was aborted by signal.");
+      onError("Request aborted.");
+    } else {
+      onError(
+        "Failed to initiate connection to the server for live AI chat: " +
+          error.message
+      );
+    }
   }
 }

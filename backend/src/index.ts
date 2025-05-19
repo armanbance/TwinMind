@@ -726,43 +726,71 @@ app.post(
         return;
       }
 
+      // Set headers for SSE
+      res.setHeader("Content-Type", "text/event-stream");
+      res.setHeader("Cache-Control", "no-cache");
+      res.setHeader("Connection", "keep-alive");
+      res.flushHeaders(); // Send headers immediately
+
       const systemPrompt = `You are an intelligent assistant. Based *only* on the provided meeting transcript, answer the user's question. Do not use any external knowledge or make assumptions beyond what is stated in the transcript. If the answer cannot be found in the transcript, clearly state that the information is not available in the provided text.`;
 
       const userMessageContent = `Meeting Transcript:\n---\n${meeting.fullTranscriptText}\n---\n\nUser's Question: ${question}`;
 
-      const completion = await openai.chat.completions.create({
+      const stream = await openai.chat.completions.create({
         model: "gpt-3.5-turbo",
         messages: [
           { role: "system", content: systemPrompt },
           { role: "user", content: userMessageContent },
         ],
         temperature: 0.2,
+        stream: true, // Enable streaming
       });
 
-      let aiAnswer = completion.choices[0]?.message?.content?.trim();
-
-      if (aiAnswer && aiAnswer.trim() !== "") {
-        res.status(200).json({ answer: aiAnswer });
-      } else {
-        res.status(500).json({ error: "AI did not return a valid answer." });
+      for await (const chunk of stream) {
+        const contentDelta = chunk.choices[0]?.delta?.content || "";
+        if (contentDelta) {
+          res.write(`data: ${JSON.stringify({ text: contentDelta })}\n\n`);
+        }
       }
+      res.write(`data: ${JSON.stringify({ event: "EOS" })}\n\n`);
+      res.end();
     } catch (error: any) {
-      console.error(`Error in /api/meetings/${meetingId}/ask-ai:`, error);
-      if (error instanceof OpenAI.APIError) {
+      console.error(
+        `Error in /api/meetings/${meetingId}/ask-ai (streaming):`,
+        error
+      );
+      if (res.headersSent) {
+        try {
+          res.write(
+            `data: ${JSON.stringify({
+              error: "An error occurred during streaming.",
+              details: error.message || "Unknown error",
+            })}\n\n`
+          );
+        } catch (e) {
+          console.error(
+            "Error writing error event to SSE stream for /ask-ai:",
+            e
+          );
+        } finally {
+          res.end();
+        }
+      } else {
+        let statusCode = 500;
+        let errorMessage = "Internal server error processing your question.";
+        if (error instanceof OpenAI.APIError) {
+          statusCode = error.status || 500;
+          errorMessage = `OpenAI API Error: ${error.message}`;
+        }
         res
-          .status(error.status || 500)
-          .json({ error: `OpenAI API Error: ${error.message}` });
-        return;
+          .status(statusCode)
+          .json({ error: errorMessage, details: error.message });
       }
-      res
-        .status(500)
-        .json({ error: "Internal server error processing your question." });
-      return;
     }
   }
 );
 
-// NEW ENDPOINT: Ask AI about an ACTIVE meeting's live transcript
+// NEW ENDPOINT: Ask AI about an ACTIVE meeting's live transcript (NOW STREAMING)
 app.post(
   "/api/meetings/:meetingId/ask-live-transcript",
   authenticateToken,
@@ -772,17 +800,16 @@ app.post(
     const userIdFromToken = req.userAuth?.userId;
 
     if (!userIdFromToken) {
+      // Headers not sent yet, so we can send a normal JSON error response
       res
         .status(401)
         .json({ error: "Authentication error: User ID not found in token." });
       return;
     }
-
     if (!mongoose.Types.ObjectId.isValid(meetingId)) {
       res.status(400).json({ error: "Invalid meeting ID format." });
       return;
     }
-
     if (!question || typeof question !== "string" || question.trim() === "") {
       res.status(400).json({ error: "Question is required." });
       return;
@@ -790,27 +817,22 @@ app.post(
 
     try {
       const meeting = await Meeting.findById(meetingId);
-
       if (!meeting) {
         res.status(404).json({ error: "Meeting not found." });
         return;
       }
-
       if (meeting.userId.toString() !== userIdFromToken) {
         res.status(403).json({
           error: "Forbidden: You do not have access to this meeting.",
         });
         return;
       }
-
-      // Allow asking even if active, as long as there is some transcript
       if (meeting.status !== "active" && meeting.status !== "completed") {
         res.status(400).json({
           error: `Cannot ask AI about a meeting with status: ${meeting.status}. Must be active or completed.`,
         });
         return;
       }
-
       if (
         !meeting.fullTranscriptText ||
         meeting.fullTranscriptText.trim() === ""
@@ -822,8 +844,13 @@ app.post(
         return;
       }
 
-      const systemPrompt = `You are an intelligent assistant. Based *only* on the provided live meeting transcript, answer the user's question concisely. The transcript may be incomplete as the meeting is ongoing. If the answer cannot be found in the transcript, clearly state that the information is not available in the provided text.`;
+      // Set headers for SSE
+      res.setHeader("Content-Type", "text/event-stream");
+      res.setHeader("Cache-Control", "no-cache");
+      res.setHeader("Connection", "keep-alive");
+      res.flushHeaders(); // Send headers immediately
 
+      const systemPrompt = `You are an intelligent assistant. Based *only* on the provided live meeting transcript, answer the user's question concisely. The transcript may be incomplete as the meeting is ongoing. If the answer cannot be found in the transcript, clearly state that the information is not available in the provided text.`;
       const userMessageContent = `Live Meeting Transcript (may be incomplete):
 ---
 ${meeting.fullTranscriptText}
@@ -831,38 +858,57 @@ ${meeting.fullTranscriptText}
 
 User's Question: ${question}`;
 
-      const completion = await openai.chat.completions.create({
+      const stream = await openai.chat.completions.create({
         model: "gpt-3.5-turbo",
         messages: [
           { role: "system", content: systemPrompt },
           { role: "user", content: userMessageContent },
         ],
-        temperature: 0.3, // Slightly higher temperature for potentially more conversational live Q&A
+        temperature: 0.3,
+        stream: true, // Enable streaming
       });
 
-      let aiAnswer = completion.choices[0]?.message?.content?.trim();
-
-      if (aiAnswer && aiAnswer.trim() !== "") {
-        res.status(200).json({ answer: aiAnswer });
-      } else {
-        res.status(500).json({ error: "AI did not return a valid answer." });
+      for await (const chunk of stream) {
+        const contentDelta = chunk.choices[0]?.delta?.content || "";
+        if (contentDelta) {
+          // SSE format: data: JSON_string\n\n
+          res.write(`data: ${JSON.stringify({ text: contentDelta })}\n\n`);
+        }
       }
+      // Signal end of stream
+      res.write(`data: ${JSON.stringify({ event: "EOS" })}\n\n`);
+      // res.end(); // Connection will be kept alive by default, client or timeout should close.
+      // Or explicitly end after the loop if no more data is expected from this request.
+      // For simplicity, let's end it here.
+      res.end();
     } catch (error: any) {
       console.error(
-        `Error in /api/meetings/${meetingId}/ask-live-transcript:`,
+        `Error in /api/meetings/${meetingId}/ask-live-transcript (streaming):`,
         error
       );
-      if (error instanceof OpenAI.APIError) {
-        res
-          .status(error.status || 500)
-          .json({ error: `OpenAI API Error: ${error.message}` });
-        return;
+      // If headers have already been sent, we can't change the status code.
+      // We try to send an error event through the stream.
+      if (res.headersSent) {
+        try {
+          res.write(
+            `data: ${JSON.stringify({
+              error: "An error occurred during streaming.",
+              details: error.message || "Unknown error", // Send error message
+            })}\n\n`
+          );
+        } catch (e) {
+          console.error("Error writing error event to SSE stream:", e);
+        } finally {
+          // Crucially, ensure the response is ended if an error occurs mid-stream.
+          res.end();
+        }
+      } else {
+        // Headers not sent, so we can send a normal JSON error response
+        res.status(500).json({
+          error: "Failed to start streaming AI response.",
+          details: error.message, // Include error message
+        });
       }
-      res.status(500).json({
-        error:
-          "Internal server error processing your question about the live transcript.",
-      });
-      return;
     }
   }
 );

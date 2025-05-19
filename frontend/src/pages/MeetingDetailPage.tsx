@@ -25,6 +25,7 @@ import {
   Send,
   Loader2,
 } from "lucide-react";
+import { useRef } from "react";
 
 interface ChatMessage {
   type: "user" | "ai";
@@ -42,6 +43,10 @@ export function MeetingDetailPage() {
   const [chatHistory, setChatHistory] = useState<ChatMessage[]>([]);
   const [isChatLoading, setIsChatLoading] = useState<boolean>(false);
   const [chatError, setChatError] = useState<string | null>(null);
+
+  // Refs for streaming AI chat
+  const chatAbortControllerRef = useRef<AbortController | null>(null);
+  const currentAiResponseRef = useRef<string>("");
 
   useEffect(() => {
     async function loadMeeting() {
@@ -199,49 +204,109 @@ export function MeetingDetailPage() {
                     </div>
                   </div>
                 ))}
-                {isChatLoading && (
-                  <div className="flex justify-start mb-2">
-                    <div className="bg-muted rounded-lg px-3 py-2 text-sm flex items-center">
-                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />{" "}
-                      Thinking...
-                    </div>
-                  </div>
-                )}
               </ScrollArea>
 
               <form
                 onSubmit={async (e: FormEvent<HTMLFormElement>) => {
                   e.preventDefault();
-                  if (!currentQuestion.trim() || isChatLoading || !meetingId)
-                    return;
+                  if (!currentQuestion.trim() || !meetingId) return;
+                  // Do not return if isChatLoading is true, instead, abort previous and start new.
 
-                  const newChatMessage: ChatMessage = {
+                  // Abort previous stream if any
+                  if (chatAbortControllerRef.current) {
+                    chatAbortControllerRef.current.abort();
+                  }
+                  chatAbortControllerRef.current = new AbortController();
+
+                  const questionToAsk = currentQuestion.trim();
+                  const userChatMessage: ChatMessage = {
                     type: "user",
-                    content: currentQuestion.trim(),
+                    content: questionToAsk,
                   };
-                  setChatHistory((prev) => [...prev, newChatMessage]);
+
+                  // Placeholder for AI response
+                  // The actual AI message content will be updated by the stream
+                  const aiPlaceholderMessage: ChatMessage = {
+                    type: "ai",
+                    content: "",
+                  };
+
+                  setChatHistory((prev) => [
+                    ...prev,
+                    userChatMessage,
+                    aiPlaceholderMessage,
+                  ]);
+                  const currentAiMessageIndex = chatHistory.length + 1; // Index of aiPlaceholderMessage after user msg
+
                   setCurrentQuestion("");
                   setIsChatLoading(true);
                   setChatError(null);
+                  currentAiResponseRef.current = ""; // Reset accumulator
 
-                  const response = await askMeetingAI(
-                    meetingId,
-                    newChatMessage.content
-                  );
-
-                  if (response.answer) {
-                    setChatHistory((prev) => [
-                      ...prev,
-                      { type: "ai", content: response.answer! },
-                    ]);
-                  } else if (response.error) {
-                    setChatError(response.error);
-                    setChatHistory((prev) => [
-                      ...prev,
-                      { type: "ai", content: `Error: ${response.error}` },
-                    ]);
+                  function handleChunkReceived(textChunk: string) {
+                    currentAiResponseRef.current += textChunk;
+                    setChatHistory((prevChatHistory) => {
+                      const newHistory = [...prevChatHistory];
+                      if (newHistory[currentAiMessageIndex]) {
+                        newHistory[currentAiMessageIndex] = {
+                          ...newHistory[currentAiMessageIndex],
+                          content: currentAiResponseRef.current,
+                        };
+                      }
+                      return newHistory;
+                    });
                   }
-                  setIsChatLoading(false);
+
+                  function handleStreamEnd() {
+                    setIsChatLoading(false);
+                    chatAbortControllerRef.current = null;
+                    console.log("[MeetingDetail] AI stream ended.");
+                  }
+
+                  function handleStreamError(errorMessage: string) {
+                    setChatError(errorMessage);
+                    setChatHistory((prevChatHistory) => {
+                      const newHistory = [...prevChatHistory];
+                      if (newHistory[currentAiMessageIndex]) {
+                        // Update the placeholder with error or keep it empty
+                        newHistory[currentAiMessageIndex] = {
+                          ...newHistory[currentAiMessageIndex],
+                          content: currentAiResponseRef.current.trim()
+                            ? currentAiResponseRef.current +
+                              `\nError: ${errorMessage}`
+                            : `Error: ${errorMessage}`,
+                        };
+                      } else {
+                        // If placeholder somehow wasn't there, add error as new message
+                        newHistory.push({
+                          type: "ai",
+                          content: `Error: ${errorMessage}`,
+                        });
+                      }
+                      return newHistory;
+                    });
+                    setIsChatLoading(false);
+                    chatAbortControllerRef.current = null;
+                  }
+
+                  try {
+                    await askMeetingAI(
+                      meetingId,
+                      questionToAsk,
+                      handleChunkReceived,
+                      handleStreamEnd,
+                      handleStreamError,
+                      chatAbortControllerRef.current.signal
+                    );
+                  } catch (outerError: any) {
+                    console.error(
+                      "[MeetingDetail] Unexpected error calling askMeetingAI:",
+                      outerError
+                    );
+                    handleStreamError(
+                      "Unexpected system error starting AI chat."
+                    );
+                  }
                 }}
                 className="flex items-center space-x-2"
               >
