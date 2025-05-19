@@ -1,4 +1,4 @@
-import express, { Express, Request, Response } from "express";
+import express, { Express, Request, Response, NextFunction } from "express";
 import dotenv from "dotenv";
 import multer from "multer";
 import OpenAI from "openai";
@@ -1304,6 +1304,11 @@ Action Items:
   }
 );
 
-app.listen(port, () => {
-  console.log(`Server is running at http://localhost:${port}`);
-});
+// Only start the server if this file is run directly (e.g., not imported by tests)
+if (require.main === module) {
+  app.listen(port, () => {
+    console.log(`Server is running at http://localhost:${port}`);
+  });
+}
+
+export default app; // Export app for testing and potentially for a separate server starter file

@@ -1,10 +1,12 @@
-import { useState } from "react";
+import React, { useState, useEffect, useRef } from "react";
+import { useNavigate } from "react-router-dom";
 import { HomeLayout } from "./HomeLayout"; // Adjusted path, renamed component
 import { MemoriesTab } from "./tabs/MemoriesTab"; // Adjusted path
 import { CalendarTab } from "./tabs/CalendarTab"; // Adjusted path
 import { QuestionsTab } from "./tabs/QuestionsTab"; // Adjusted path
-import { SearchBar } from "./home-page-components/search-bar"; // Adjusted path
 import { CaptureButton } from "./home-page-components/capture-button"; // Adjusted path
+import { CalendarComponent } from "./home-page-components/calendar-component";
+import { UpcomingMeetings } from "./home-page-components/upcoming-meetings";
 
 // Ensure Tab type is consistent or imported if defined centrally
 type Tab = "memories" | "calendar" | "questions";
@@ -30,7 +32,6 @@ export function HomePage() {
           {activeTab === "questions" && <QuestionsTab />}
         </div>
         <div className="sticky bottom-0 pb-4 pt-2 bg-gradient-to-t from-background via-background to-transparent">
-          <SearchBar />
           <CaptureButton
             onMeetingSuccessfullyEnded={triggerMeetingsListRefresh}
           />
