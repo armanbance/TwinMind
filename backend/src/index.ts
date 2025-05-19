@@ -11,10 +11,6 @@ import User from "./models/user.model"; // Import the User model
 import Memory, { IMemory } from "./models/memory.model"; // Import the Memory model and its interface
 import { google } from "googleapis"; // Import googleapis
 import { exec } from "child_process"; // Added for ffmpeg
-import {
-  getPineconeIndex,
-  OPENAI_EMBEDDING_MODEL,
-} from "./lib/pinecone-client"; // Added Pinecone import
 import { S3Client } from "@aws-sdk/client-s3";
 import { Upload } from "@aws-sdk/lib-storage";
 import multerS3 from "multer-s3";
@@ -248,61 +244,6 @@ app.post(
       });
       const savedMemory = await memoryDoc.save();
 
-      // After saving to MongoDB, generate embedding and upsert to Pinecone
-      try {
-        const pineconeIndex = await getPineconeIndex();
-
-        // 1. Generate embedding from OpenAI
-        const embeddingResponse = await openai.embeddings.create({
-          model: OPENAI_EMBEDDING_MODEL,
-          input: transcribedText,
-        });
-
-        const embeddingVector = embeddingResponse.data[0].embedding;
-
-        if (!embeddingVector) {
-          throw new Error(
-            "OpenAI embedding generation failed, no vector returned."
-          );
-        }
-
-        // 2. Prepare vector for Pinecone
-        // Mongoose documents have an `id` virtual getter which is `_id.toString()`
-        // and `_id` is of type ObjectId. `createdAt` is a Date.
-        const pineconeVectorId = savedMemory.id; // This is a string
-        const memoryIdForMetadata = savedMemory.id; // Also a string
-        const createdAtForMetadata = (
-          savedMemory.createdAt as Date
-        ).toISOString();
-
-        const vectorToUpsert = {
-          id: pineconeVectorId,
-          values: embeddingVector,
-          metadata: {
-            userId: userIdFromToken,
-            memoryId: memoryIdForMetadata,
-            originalTextSnippet: transcribedText.substring(0, 500),
-            createdAt: createdAtForMetadata,
-          },
-        };
-
-        // 3. Upsert to Pinecone
-        await pineconeIndex.upsert([vectorToUpsert]);
-        console.log(
-          `[Pinecone] Successfully upserted embedding for memory ${pineconeVectorId}`
-        );
-      } catch (pineconeEmbedError: unknown) {
-        let errorMessage =
-          "An unknown error occurred during Pinecone embedding/upsert.";
-        if (pineconeEmbedError instanceof Error) {
-          errorMessage = pineconeEmbedError.message;
-        }
-        console.error(
-          `[Pinecone Error] Failed to upsert embedding for memory ${savedMemory.id}:`,
-          errorMessage
-        );
-      }
-
       res.status(201).json({
         message: "Transcription successful and memory saved.",
         transcription: transcribedText,
@@ -454,133 +395,6 @@ app.get(
           details: error.message,
         });
       }
-    }
-  }
-);
-
-// Endpoint to ask questions about memories using AI and Pinecone for semantic search
-app.post(
-  "/api/memories/ask-ai",
-  authenticateToken,
-  async (req: AuthenticatedRequest, res: express.Response): Promise<void> => {
-    const userIdFromToken = req.userAuth?.userId;
-    const { question } = req.body;
-
-    if (!userIdFromToken) {
-      res
-        .status(401)
-        .json({ error: "Authentication error: User ID not found." });
-      return;
-    }
-    if (!question || typeof question !== "string") {
-      res
-        .status(400)
-        .json({ error: "Missing or invalid 'question' in request body." });
-      return;
-    }
-
-    try {
-      const pineconeIndex = await getPineconeIndex();
-
-      // 1. Generate embedding for the user's question
-      const questionEmbeddingResponse = await openai.embeddings.create({
-        model: OPENAI_EMBEDDING_MODEL, // from ./lib/pinecone-client
-        input: question,
-      });
-      const questionVector = questionEmbeddingResponse.data[0].embedding;
-
-      if (!questionVector) {
-        throw new Error("Failed to generate embedding for the question.");
-      }
-
-      // 2. Query Pinecone for relevant memories, filtering by userId
-      const topK = 5; // Number of relevant memories to retrieve
-      const queryResponse = await pineconeIndex.query({
-        vector: questionVector,
-        topK: topK,
-        filter: { userId: userIdFromToken },
-        includeMetadata: true, // Ensure metadata is returned
-        includeValues: false, // We don't need the vectors themselves, just metadata
-      });
-
-      const relevantMemoryIds =
-        queryResponse.matches?.map((match: { id: any }) => match.id) || [];
-
-      if (relevantMemoryIds.length === 0) {
-        res.status(200).json({
-          answer:
-            "I couldn't find any memories directly relevant to your question. Try rephrasing or asking something else!",
-        });
-        return;
-      }
-
-      // 3. Retrieve full memory text from MongoDB for the relevant IDs
-      const relevantMemoriesFromDb = await Memory.find({
-        _id: { $in: relevantMemoryIds },
-        userId: userIdFromToken, // Double check userId for security
-      }).sort({ createdAt: "desc" }); // Sort by most recent if desired
-
-      if (relevantMemoriesFromDb.length === 0) {
-        // This case should be rare if Pinecone returned IDs that were originally from this user
-        console.warn(
-          `[ask-ai] Pinecone returned IDs [${relevantMemoryIds.join(
-            ", "
-          )}] but no matching memories found in DB for user ${userIdFromToken}`
-        );
-        res.status(200).json({
-          answer:
-            "Found some potentially relevant memories, but couldn't retrieve their full text. Please try again.",
-        });
-        return;
-      }
-
-      // 4. Construct context and prompt for OpenAI Chat Completion
-      const contextForLLM = relevantMemoriesFromDb
-        .map(
-          (mem) =>
-            `Memory from ${new Date(mem.createdAt).toLocaleDateString()}:\n${
-              mem.text
-            }`
-        )
-        .join("\n\n---\n\n");
-
-      // 5. Call OpenAI Chat Completion API
-      const chatCompletionResponse = await openai.chat.completions.create({
-        model: "gpt-3.5-turbo",
-        temperature: 0.2,
-        messages: [
-          {
-            role: "system",
-            content:
-              "You are an AI assistant. Your task is to answer the user's question based ONLY on the provided context from their memories. The relevant memories are listed below. If the answer cannot be found within this context, you MUST explicitly state that you cannot answer the question based on the provided memories. Do not rely on any external knowledge. Be concise and accurate.",
-          },
-          {
-            role: "user",
-            content: `Context from my relevant memories:\n---\n${contextForLLM}\n---\n\nBased *only* on the context above, please answer my question: ${question}`,
-          },
-        ],
-      });
-
-      const aiAnswer =
-        chatCompletionResponse.choices[0].message?.content?.trim();
-
-      if (!aiAnswer) {
-        throw new Error("OpenAI chat completion did not return an answer.");
-      }
-
-      res.status(200).json({
-        answer: aiAnswer,
-        retrievedMemoriesCount: relevantMemoriesFromDb.length,
-      });
-    } catch (error: any) {
-      console.error(
-        "[ask-ai] Error processing question:",
-        error.message || error
-      );
-      res.status(500).json({
-        error: "Failed to process your question.",
-        details: error.message,
-      });
     }
   }
 );
