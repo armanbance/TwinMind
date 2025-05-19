@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback } from "react";
-import axios from "axios";
+// Removed axios import as it was only used for the legacy AI feature
 import {
   Card,
   CardContent,
@@ -8,15 +8,16 @@ import {
   CardDescription,
 } from "@/components/ui/card";
 import { useAuth } from "../contexts/AuthContext";
-import { Input } from "@/components/ui/input";
+// Removed Input and Button imports that were only for the legacy AI form, if they are not used elsewhere in this file.
+// Assuming Button might still be used for error retry, will keep it for now unless linter complains.
 import { Button } from "@/components/ui/button";
 import { fetchMeetings, IMeetingSummary } from "@/lib/apiClient";
 import { RefreshCw, AlertCircle } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 
 // Define API_BASE_URL, assuming VITE_API_BASE_URL should point to the backend
-const API_BASE_URL =
-  import.meta.env.VITE_API_BASE_URL || "http://localhost:8080";
+// This can be removed if no other API calls in this file use it directly.
+// const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "http://localhost:8080";
 
 interface MemoriesTabProps {
   listVersion: number; // Prop to trigger refresh
@@ -31,12 +32,12 @@ export function MemoriesTab({ listVersion }: MemoriesTabProps) {
     null
   );
 
-  const [userQuestion, setUserQuestion] = useState<string>("");
-  const [aiAnswer, setAiAnswer] = useState<string | null>(null);
-  const [isAskingAI, setIsAskingAI] = useState<boolean>(false);
-  const [askAIError, setAskAIError] = useState<string | null>(null);
-  const [retrievedMemoriesCountForAsk, setRetrievedMemoriesCountForAsk] =
-    useState<number | null>(null);
+  // Removed state variables for the legacy AI feature:
+  // const [userQuestion, setUserQuestion] = useState<string>("");
+  // const [aiAnswer, setAiAnswer] = useState<string | null>(null);
+  // const [isAskingAI, setIsAskingAI] = useState<boolean>(false);
+  // const [askAIError, setAskAIError] = useState<string | null>(null);
+  // const [retrievedMemoriesCountForAsk, setRetrievedMemoriesCountForAsk] = useState<number | null>(null);
 
   const auth = useAuth();
   const navigate = useNavigate();
@@ -64,59 +65,13 @@ export function MemoriesTab({ listVersion }: MemoriesTabProps) {
       setMeetingSummaries(displayableMeetings);
     }
     setIsLoadingMeetings(false);
-  }, [auth, listVersion]);
+  }, [auth]); // Removed listVersion from dependency array as it's passed directly now
 
   useEffect(() => {
     loadMeetingSummaries();
-  }, [loadMeetingSummaries, listVersion]);
+  }, [loadMeetingSummaries, listVersion]); // listVersion is the prop triggering refresh
 
-  const handleAskAISubmit = async (e: React.FormEvent<HTMLFormElement>) => {
-    e.preventDefault();
-    if (!userQuestion.trim()) {
-      setAskAIError("Please enter a question.");
-      return;
-    }
-    const token = auth.getAuthToken();
-    if (!token) {
-      setAskAIError("Not authenticated. Please log in.");
-      return;
-    }
-    setIsAskingAI(true);
-    setAiAnswer(null);
-    setAskAIError(null);
-    setRetrievedMemoriesCountForAsk(null);
-    try {
-      const response = await axios.post(
-        `${API_BASE_URL}/api/memories/ask-ai`,
-        { question: userQuestion },
-        {
-          headers: {
-            Authorization: `Bearer ${token}`,
-            "Content-Type": "application/json",
-          },
-        }
-      );
-      setAiAnswer(response.data.answer);
-      setRetrievedMemoriesCountForAsk(response.data.retrievedMemoriesCount);
-    } catch (err: unknown) {
-      console.error("Error asking global AI:", err);
-      if (axios.isAxiosError(err) && err.response) {
-        setAskAIError(
-          `Error: ${
-            err.response.data.error ||
-            err.response.statusText ||
-            "Failed to get answer"
-          }`
-        );
-      } else if (err instanceof Error) {
-        setAskAIError(`Error: ${err.message}`);
-      } else {
-        setAskAIError("An unknown error occurred while asking global AI.");
-      }
-    } finally {
-      setIsAskingAI(false);
-    }
-  };
+  // Removed handleAskAISubmit function entirely
 
   let meetingsContent;
   if (isLoadingMeetings) {
@@ -213,59 +168,7 @@ export function MemoriesTab({ listVersion }: MemoriesTabProps) {
 
   return (
     <div className="space-y-8">
-      <Card className="shadow-lg">
-        <CardHeader>
-          <CardTitle>Ask TwinMind AI (All Memories)</CardTitle>
-          <CardDescription>
-            Ask questions about your historically recorded memories (old
-            system).
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-4">
-          <form onSubmit={handleAskAISubmit} className="space-y-3">
-            <Input
-              type="text"
-              placeholder="What would you like to know about your old memories?"
-              value={userQuestion}
-              onChange={(e) => setUserQuestion(e.target.value)}
-              disabled={isAskingAI}
-            />
-            <Button
-              type="submit"
-              disabled={isAskingAI}
-              className="w-full sm:w-auto"
-            >
-              {isAskingAI ? "Thinking..." : "Ask Legacy AI"}
-            </Button>
-          </form>
-          {askAIError && (
-            <Card className="border-destructive bg-destructive/10">
-              <CardContent className="p-3 text-destructive">
-                <p className="font-medium text-sm">Error</p>
-                <p className="text-xs">{askAIError}</p>
-              </CardContent>
-            </Card>
-          )}
-          {aiAnswer && (
-            <Card className="bg-muted/50">
-              <CardHeader className="pb-2 pt-4">
-                <p className="text-xs font-medium text-primary">
-                  TwinMind Legacy AI Says:
-                </p>
-              </CardHeader>
-              <CardContent className="p-4 pt-0">
-                <p className="whitespace-pre-wrap">{aiAnswer}</p>
-                {retrievedMemoriesCountForAsk !== null && (
-                  <p className="text-xs text-muted-foreground mt-2">
-                    (Answer based on {retrievedMemoriesCountForAsk} memory
-                    snippets from the old system)
-                  </p>
-                )}
-              </CardContent>
-            </Card>
-          )}
-        </CardContent>
-      </Card>
+      {/* The entire Card for "Ask TwinMind AI (All Memories)" has been removed */}
 
       <div>
         <h2 className="text-xl font-semibold mb-4">Your Meeting Summaries</h2>

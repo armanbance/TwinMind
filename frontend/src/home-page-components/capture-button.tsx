@@ -5,9 +5,12 @@ import {
   transcribeAudioChunkWithClient,
   startMeeting,
   endMeeting,
+  askLiveMeetingTranscriptAI,
 } from "@/lib/apiClient";
 import { useAuth } from "@/contexts/AuthContext";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
+import { ScrollArea } from "@/components/ui/scroll-area";
 
 interface CaptureButtonProps {
   onMeetingSuccessfullyEnded?: () => void;
@@ -32,6 +35,14 @@ export function CaptureButton({
   const activeMeetingIdRef = useRef<string | null>(null);
   const segmentTimerRef = useRef<NodeJS.Timeout | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
+
+  // State for live AI chat during recording
+  const [liveQuestion, setLiveQuestion] = useState("");
+  const [liveAiChatHistory, setLiveAiChatHistory] = useState<
+    { user: string; ai: string }[]
+  >([]);
+  const [isAskingLiveAi, setIsAskingLiveAi] = useState(false);
+  const [liveAiError, setLiveAiError] = useState<string | null>(null);
 
   useEffect(() => {
     const checkMimeTypeSupport = () => {
@@ -590,6 +601,41 @@ export function CaptureButton({
     }
   }
 
+  // Handler for submitting questions about the live transcript
+  async function handleAskLiveAISubmit(e: React.FormEvent<HTMLFormElement>) {
+    e.preventDefault();
+    if (!liveQuestion.trim() || !currentMeetingId) {
+      setLiveAiError("Please enter a question. A meeting must be active.");
+      return;
+    }
+
+    const questionToAsk = liveQuestion;
+    setLiveQuestion(""); // Clear input immediately
+    setIsAskingLiveAi(true);
+    setLiveAiError(null);
+
+    // Add user's question to chat history optimistically
+    // setLiveAiChatHistory(prev => [...prev, { user: questionToAsk, ai: "Thinking..."}]);
+
+    const result = await askLiveMeetingTranscriptAI(
+      currentMeetingId,
+      questionToAsk
+    );
+
+    if (result.error) {
+      setLiveAiError(result.error);
+      // Remove optimistic message or update it with error
+      // setLiveAiChatHistory(prev => prev.map(item => item.user === questionToAsk && item.ai === "Thinking..." ? { ...item, ai: `Error: ${result.error}` } : item));
+      // For simplicity now, just log error, user can retry.
+    } else if (result.answer) {
+      setLiveAiChatHistory((prev) => [
+        ...prev,
+        { user: questionToAsk, ai: result.answer! },
+      ]);
+    }
+    setIsAskingLiveAi(false);
+  }
+
   const buttonDisabled =
     isAuthLoading ||
     (isRecording && isStopping && !isStoppingIntentRef.current);
@@ -639,6 +685,53 @@ export function CaptureButton({
         </Card>
       )}
       {error && <p className="text-sm text-red-500">Error: {error}</p>}
+
+      {/* Live AI Chat during recording */}
+      {isRecording && currentMeetingId && liveTranscript && (
+        <Card className="w-full mt-4">
+          <CardHeader className="pb-2 pt-3">
+            <CardTitle className="text-md font-semibold">
+              Ask AI (Live Transcript)
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="p-3 pt-0 space-y-3">
+            {liveAiChatHistory.length > 0 && (
+              <ScrollArea className="h-40 w-full p-2 border rounded-md">
+                {liveAiChatHistory.map((chat, index) => (
+                  <div key={index} className="mb-2 text-xs">
+                    <p className="font-semibold text-blue-600">
+                      You: {chat.user}
+                    </p>
+                    <p className="text-gray-700 whitespace-pre-wrap">
+                      AI: {chat.ai}
+                    </p>
+                  </div>
+                ))}
+              </ScrollArea>
+            )}
+            <form onSubmit={handleAskLiveAISubmit} className="flex space-x-2">
+              <Input
+                type="text"
+                placeholder="Ask about live transcript..."
+                value={liveQuestion}
+                onChange={(e) => setLiveQuestion(e.target.value)}
+                disabled={isAskingLiveAi}
+                className="flex-grow"
+              />
+              <Button type="submit" disabled={isAskingLiveAi} size="sm">
+                {isAskingLiveAi ? (
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                ) : (
+                  "Ask"
+                )}
+              </Button>
+            </form>
+            {liveAiError && (
+              <p className="text-xs text-red-500">Error: {liveAiError}</p>
+            )}
+          </CardContent>
+        </Card>
+      )}
     </div>
   );
 }

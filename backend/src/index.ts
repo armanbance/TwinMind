@@ -762,6 +762,111 @@ app.post(
   }
 );
 
+// NEW ENDPOINT: Ask AI about an ACTIVE meeting's live transcript
+app.post(
+  "/api/meetings/:meetingId/ask-live-transcript",
+  authenticateToken,
+  async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+    const { meetingId } = req.params;
+    const { question } = req.body;
+    const userIdFromToken = req.userAuth?.userId;
+
+    if (!userIdFromToken) {
+      res
+        .status(401)
+        .json({ error: "Authentication error: User ID not found in token." });
+      return;
+    }
+
+    if (!mongoose.Types.ObjectId.isValid(meetingId)) {
+      res.status(400).json({ error: "Invalid meeting ID format." });
+      return;
+    }
+
+    if (!question || typeof question !== "string" || question.trim() === "") {
+      res.status(400).json({ error: "Question is required." });
+      return;
+    }
+
+    try {
+      const meeting = await Meeting.findById(meetingId);
+
+      if (!meeting) {
+        res.status(404).json({ error: "Meeting not found." });
+        return;
+      }
+
+      if (meeting.userId.toString() !== userIdFromToken) {
+        res.status(403).json({
+          error: "Forbidden: You do not have access to this meeting.",
+        });
+        return;
+      }
+
+      // Allow asking even if active, as long as there is some transcript
+      if (meeting.status !== "active" && meeting.status !== "completed") {
+        res.status(400).json({
+          error: `Cannot ask AI about a meeting with status: ${meeting.status}. Must be active or completed.`,
+        });
+        return;
+      }
+
+      if (
+        !meeting.fullTranscriptText ||
+        meeting.fullTranscriptText.trim() === ""
+      ) {
+        res.status(400).json({
+          error:
+            "Meeting transcript is currently empty. Ask again once there is some text.",
+        });
+        return;
+      }
+
+      const systemPrompt = `You are an intelligent assistant. Based *only* on the provided live meeting transcript, answer the user's question concisely. The transcript may be incomplete as the meeting is ongoing. If the answer cannot be found in the transcript, clearly state that the information is not available in the provided text.`;
+
+      const userMessageContent = `Live Meeting Transcript (may be incomplete):
+---
+${meeting.fullTranscriptText}
+---
+
+User's Question: ${question}`;
+
+      const completion = await openai.chat.completions.create({
+        model: "gpt-3.5-turbo",
+        messages: [
+          { role: "system", content: systemPrompt },
+          { role: "user", content: userMessageContent },
+        ],
+        temperature: 0.3, // Slightly higher temperature for potentially more conversational live Q&A
+      });
+
+      let aiAnswer = completion.choices[0]?.message?.content?.trim();
+
+      if (aiAnswer && aiAnswer.trim() !== "") {
+        res.status(200).json({ answer: aiAnswer });
+      } else {
+        res.status(500).json({ error: "AI did not return a valid answer." });
+      }
+    } catch (error: any) {
+      console.error(
+        `Error in /api/meetings/${meetingId}/ask-live-transcript:`,
+        error
+      );
+      if (error instanceof OpenAI.APIError) {
+        res
+          .status(error.status || 500)
+          .json({ error: `OpenAI API Error: ${error.message}` });
+        return;
+      }
+      res.status(500).json({
+        error:
+          "Internal server error processing your question about the live transcript.",
+      });
+      return;
+    }
+  }
+);
+
 // Modified endpoint for transcribing and saving audio chunks to a specific meeting
 app.post(
   "/api/meetings/:meetingId/chunk", // Changed route to include meetingId

@@ -344,3 +344,47 @@ export async function askMeetingAI(
     };
   }
 }
+
+export async function askLiveMeetingTranscriptAI(
+  meetingId: string,
+  question: string
+): Promise<{ answer?: string; error?: string }> {
+  // Removed direct token handling as apiClient instance will handle it via interceptor
+  // const token = localStorage.getItem("authToken");
+  // if (!token) return { error: "No authentication token found." };
+
+  try {
+    // Use the global apiClient instance which has the interceptor
+    const response = await apiClient.post(
+      `/api/meetings/${meetingId}/ask-live-transcript`, // apiClient prepends API_BASE_URL
+      { question },
+      {
+        headers: {
+          // Authorization header will be added by the interceptor
+          "Content-Type": "application/json", // Still good to specify for POST
+        },
+      }
+    );
+    return { answer: response.data.answer };
+  } catch (error: unknown) {
+    if (axios.isAxiosError(error) && error.response) {
+      console.error(
+        "askLiveMeetingTranscriptAI error (axios):",
+        error.response.data
+      );
+      return {
+        error:
+          error.response.data.error ||
+          `Server responded with ${error.response.status}`,
+      };
+    } else if (error instanceof Error) {
+      console.error(
+        "askLiveMeetingTranscriptAI error (generic):",
+        error.message
+      );
+      return { error: error.message };
+    }
+    console.error("askLiveMeetingTranscriptAI error (unknown):", error);
+    return { error: "An unknown error occurred." };
+  }
+}
