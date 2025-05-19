@@ -1213,7 +1213,7 @@ First, write a single, concise sentence that provides an overall summary of the 
 After this single sentence, leave a blank line.
 
 Then, provide a more detailed breakdown under the following headings:
-- Main Topics: (List key topics discussed. If none, state "No main topics were discussed.")
+- Main Topics: (List key topics discussed. For each topic, provide a brief 1-2 sentence elaboration capturing the core points or examples mentioned about that topic in the transcript. If no main topics were discussed, state "No main topics were discussed.")
 - Decisions: (List specific decisions made. If none, state "No specific decisions were made.")
 - Action Items: (List action items assigned. If none, state "No action items were assigned.")
 

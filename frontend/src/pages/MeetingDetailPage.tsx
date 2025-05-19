@@ -129,17 +129,14 @@ export function MeetingDetailPage() {
           <CardTitle className="text-2xl md:text-3xl">
             {meeting.title || `Meeting Details`}
           </CardTitle>
-          <CardDescription className="text-sm md:text-base">
+          <CardDescription className="text-sm md:text-base text-muted-foreground">
             Recorded on: {new Date(meeting.startTime).toLocaleString()}
             {meeting.endTime &&
               ` - Ended: ${new Date(meeting.endTime).toLocaleString()}`}
           </CardDescription>
           {meeting.status === "completed" && meeting.summary && (
             <div className="mt-4 pt-4 border-t">
-              <h3 className="text-lg font-semibold mb-2 text-gray-800">
-                Summary:
-              </h3>
-              <p className="text-sm text-gray-600 whitespace-pre-wrap bg-slate-50 p-3 rounded-md">
+              <p className="text-sm text-gray-300 whitespace-pre-wrap p-3 rounded-md">
                 {meeting.summary}
               </p>
             </div>
@@ -147,14 +144,14 @@ export function MeetingDetailPage() {
         </CardHeader>
       </Card>
 
-      <Card className="mb-8">
+      <Card className="mb-8 shadow-lg">
         <CardHeader>
           <CardTitle className="text-xl md:text-2xl">Full Transcript</CardTitle>
         </CardHeader>
         <CardContent>
           {meeting.fullTranscriptText &&
           meeting.fullTranscriptText.trim() !== "" ? (
-            <p className="text-base text-gray-700 whitespace-pre-wrap leading-relaxed">
+            <p className="text-base text-white whitespace-pre-wrap leading-relaxed">
               {meeting.fullTranscriptText}
             </p>
           ) : (
@@ -169,13 +166,13 @@ export function MeetingDetailPage() {
       {meeting &&
         meeting.status === "completed" &&
         meeting.fullTranscriptText && (
-          <Card className="mt-8">
+          <Card className="mt-8 shadow-lg">
             <CardHeader>
               <CardTitle className="flex items-center">
                 <MessageSquare className="mr-2 h-6 w-6 text-primary" />
                 Chat with this Meeting's Transcript
               </CardTitle>
-              <CardDescription>
+              <CardDescription className="text-muted-foreground">
                 Ask questions specifically about the content of this meeting.
               </CardDescription>
             </CardHeader>
